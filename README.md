@@ -31,5 +31,5 @@ Early development: multiboot header, kernel entry, VGA text-mode driver.
 - [x] GDT (Global Descriptor Table)
 - [x] IDT and interrupt handling
 - [x] PS/2 keyboard driver
-- [ ] `kmalloc` / physical memory manager
+- [x] `kmalloc` / physical memory manager
 - [x] Shell
