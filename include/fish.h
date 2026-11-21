@@ -33,6 +33,7 @@
 #define FISH_ERR_NODISK -9
 #define FISH_ERR_IO     -10
 #define FISH_ERR_FORMAT -11
+#define FISH_ERR_NOMEM  -12
 
 void fish_init(void);
 

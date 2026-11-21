@@ -10,6 +10,7 @@
 #include "fish.h"
 #include "string.h"
 #include "ata.h"
+#include "heap.h"
 #include <stdint.h>
 
 struct node {
@@ -312,8 +313,11 @@ int fish_save(void)
     sb.node_size  = (uint32_t)sizeof(struct node);
     sb.current    = (uint32_t)current;
 
+    /* Wipe the superblock first and write it again last. If a write fails
+     * in between, the disk holds no valid image - which fish_load reports
+     * cleanly - instead of a valid-looking header in front of half-written
+     * nodes, which it would happily believe. */
     memset(sector, 0, sizeof(sector));
-    memcpy(sector, &sb, sizeof(sb));
     if (ata_write(FISH_START_LBA, 1, sector) != 0) return FISH_ERR_IO;
 
     /* Copy through a 512-byte buffer so the last, partly filled sector
@@ -330,14 +334,61 @@ int fish_save(void)
         written += chunk;
     }
 
+    /* Every node is on the disk. Only now does the image become valid. */
+    memset(sector, 0, sizeof(sector));
+    memcpy(sector, &sb, sizeof(sb));
+    if (ata_write(FISH_START_LBA, 1, sector) != 0) return FISH_ERR_IO;
+
     return FISH_OK;
+}
+
+/* Checks a node array that came off the disk before we trust it. A
+ * damaged image must not be able to crash the kernel: an unterminated
+ * name would run strcmp off the end, a size above FISH_FILE_MAX would
+ * make cat read past the node, and a parent index outside the pool would
+ * send fish_path into random memory. Returns 1 if the image is sane. */
+static int image_is_sane(const struct node *image)
+{
+    const struct node *root = &image[0];
+
+    if (root->used != 1 || root->is_dir != 1 || root->parent != -1) return 0;
+
+    for (int i = 1; i < FISH_MAX_NODES; i++) {
+        const struct node *n = &image[i];
+        int terminated = 0;
+        int up, steps;
+
+        if (n->used == 0) continue;
+        if (n->used != 1) return 0;
+        if (n->is_dir != 0 && n->is_dir != 1) return 0;
+        if (n->size > FISH_FILE_MAX) return 0;
+
+        for (int j = 0; j < FISH_NAME_MAX; j++) {
+            if (n->name[j] == '\0') { terminated = 1; break; }
+        }
+        if (!terminated || !valid_name(n->name)) return 0;
+
+        if (n->parent < 0 || n->parent >= FISH_MAX_NODES) return 0;
+        if (image[n->parent].used != 1 || image[n->parent].is_dir != 1) return 0;
+
+        /* Every node must lead back to the root. Without this, two nodes
+         * naming each other as parent would form a loop nobody can reach. */
+        up = i;
+        for (steps = 0; up != 0 && steps < FISH_MAX_NODES; steps++) {
+            up = image[up].parent;
+        }
+        if (up != 0) return 0;
+    }
+
+    return 1;
 }
 
 int fish_load(void)
 {
     char sector[ATA_SECTOR_SIZE];
     struct superblock sb;
-    char *dest = (char *)nodes;
+    struct node *image;
+    char *dest;
     uint32_t read_so_far = 0;
 
     if (!ata_present()) return FISH_ERR_NODISK;
@@ -352,16 +403,34 @@ int fish_load(void)
     if (sb.node_count != FISH_MAX_NODES)           return FISH_ERR_FORMAT;
     if (sb.node_size != sizeof(struct node))       return FISH_ERR_FORMAT;
 
+    /* Read into a scratch copy, not straight into 'nodes'. If the disk
+     * fails halfway, or the image turns out to be damaged, the files in
+     * memory are left exactly as they were. */
+    image = kmalloc(NODE_BYTES);
+    if (image == 0) return FISH_ERR_NOMEM;
+    dest = (char *)image;
+
     for (uint32_t s = 0; s < NODE_SECTORS; s++) {
         uint32_t remaining = (uint32_t)NODE_BYTES - read_so_far;
         uint32_t chunk = remaining < ATA_SECTOR_SIZE ? remaining
                                                      : ATA_SECTOR_SIZE;
 
-        if (ata_read(FISH_START_LBA + 1 + s, 1, sector) != 0) return FISH_ERR_IO;
+        if (ata_read(FISH_START_LBA + 1 + s, 1, sector) != 0) {
+            kfree(image);
+            return FISH_ERR_IO;
+        }
 
         memcpy(dest + read_so_far, sector, chunk);
         read_so_far += chunk;
     }
+
+    if (!image_is_sane(image)) {
+        kfree(image);
+        return FISH_ERR_FORMAT;
+    }
+
+    memcpy(nodes, image, NODE_BYTES);
+    kfree(image);
 
     /* The saved directory index came off a disk, so treat it as
      * untrusted: fall back to the root if it makes no sense. */
@@ -371,12 +440,6 @@ int fish_load(void)
         current = 0;
     } else {
         current = (int)sb.current;
-    }
-
-    /* The root must always exist, whatever the image claimed. */
-    if (!nodes[0].used || !nodes[0].is_dir) {
-        fish_init();
-        return FISH_ERR_FORMAT;
     }
 
     return FISH_OK;
@@ -397,6 +460,7 @@ const char *fish_error(int code)
     case FISH_ERR_NODISK:    return "no disk found";
     case FISH_ERR_IO:        return "disk error";
     case FISH_ERR_FORMAT:    return "disk holds no valid Fish image";
+    case FISH_ERR_NOMEM:     return "out of memory";
     default:                 return "unknown error";
     }
 }

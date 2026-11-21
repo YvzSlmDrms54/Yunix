@@ -324,7 +324,16 @@ static void cmd_format(const char *arg)
 {
     int result;
 
-    (void)arg;
+    if (strcmp(arg, "yes") != 0) {
+        vga_write("This erases every file, in memory and on the disk.\n");
+        vga_write("Type: format yes\n");
+        return;
+    }
+
+    /* Check before wiping anything. Otherwise, with no disk attached,
+     * fish_init() would erase every file in memory and only then would
+     * the save fail. */
+    if (!ata_present()) { fish_fail("format", FISH_ERR_NODISK); return; }
 
     fish_init();
     result = fish_save();
@@ -414,7 +423,7 @@ static const struct command commands[] = {
     { "rm",       "<name>",         "delete a file or empty directory",  cmd_rm       },
     { "save",     "",               "write the filesystem to disk",      cmd_save     },
     { "load",     "",               "read the filesystem from disk",     cmd_load     },
-    { "format",   "",               "erase the filesystem and save it",  cmd_format   },
+    { "format",   "yes",            "erase the filesystem and save it",  cmd_format   },
     { "disk",     "",               "is there a disk attached?",         cmd_disk     },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },
     { "whoami",   "",               "print the current user name",       cmd_whoami   },
@@ -495,7 +504,12 @@ static void cmd_help(const char *arg)
         vga_putchar('\n');
     }
 
-    if (page < pages) vga_write("\nType help 2 for more.\n");
+    if (page < pages) {
+        vga_write("\nType help ");
+        utoa((unsigned int)(page + 1), buffer, 10);
+        vga_write(buffer);
+        vga_write(" for more.\n");
+    }
 }
 
 /* --- input --- */

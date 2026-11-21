@@ -52,7 +52,7 @@ void kernel_main(void)
             user_load();
         } else {
             vga_set_color(VGA_YELLOW, VGA_BLACK);
-            vga_write("[ .. ] No saved filesystem. Type format to make one.\n");
+            vga_write("[ .. ] No saved filesystem. Type format yes to make one.\n");
         }
     } else {
         vga_set_color(VGA_YELLOW, VGA_BLACK);
