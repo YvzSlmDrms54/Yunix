@@ -1,6 +1,6 @@
 CC      = gcc
 LD      = ld
-CFLAGS  = -m32 -std=gnu99 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -Iinclude
+CFLAGS  = -m32 -march=i686 -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mno-3dnow -std=gnu99 -ffreestanding -O2 -Wall -Wextra -fno-stack-protector -Iinclude
 LDFLAGS = -m elf_i386 -T linker.ld -nostdlib
 
 KERNEL  = seaweed.bin

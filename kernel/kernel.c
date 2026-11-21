@@ -9,6 +9,7 @@
 #include "user.h"
 #include "fish.h"
 #include "ata.h"
+#include "heap.h"
 
 void kernel_main(void)
 {
@@ -37,12 +38,12 @@ void kernel_main(void)
     __asm__ volatile ("sti");
     vga_write("[ ok ] Interrupts enabled\n");
 
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-    vga_write("\nType help for a list of commands.\n\n");
+    heap_init();
+    vga_write("[ ok ] Heap ready (256 KiB)\n");
 
     user_init();
     fish_init();
-        if (ata_init()) {
+    if (ata_init()) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_write("[ ok ] ATA disk found on the primary channel\n");
 
@@ -58,6 +59,7 @@ void kernel_main(void)
         vga_write("[ .. ] No disk found. Files will vanish on reboot.\n");
     }
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    vga_write("\nType help for a list of commands.\n\n");
 
     shell_run();   /* never returns */
 }
