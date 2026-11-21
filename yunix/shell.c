@@ -586,11 +586,21 @@ static void execute(char *text)
 
 void shell_run(void)
 {
+    char path[FISH_PATH_MAX];
+
     for (;;) {
+        /* user@host /current/dir >> */
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_write(user_name());
         vga_putchar('@');
         vga_write(user_host());
+        vga_putchar(' ');
+
+        fish_path(path, sizeof(path));
+        vga_set_color(VGA_LIGHT_BLUE, VGA_BLACK);
+        vga_write(path);
+
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_write(" >> ");
 
         vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
