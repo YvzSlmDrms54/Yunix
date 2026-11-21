@@ -3,4 +3,5 @@ iso/
 *.o
 *.bin
 *.iso
-*.img
+
+disk.img
