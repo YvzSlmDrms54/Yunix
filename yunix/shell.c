@@ -509,11 +509,127 @@ static void cmd_help(const char *arg)
 
 /* --- input --- */
 
-/* Reads one line. Backspace can only delete what the user typed on this
- * line, never the prompt or anything printed before it. */
+/* --- command history ---
+ *
+ * The last HISTORY_SIZE commands, in a ring: 'history_next' is the slot
+ * the next command goes into, so the newest one sits just before it.
+ * Empty lines and a repeat of the previous command are not added. */
+
+#define HISTORY_SIZE 16
+
+static char   history[HISTORY_SIZE][LINE_MAX];
+static size_t history_count;
+static size_t history_next;
+
+static void history_add(const char *text)
+{
+    const char *p = text;
+
+    while (*p == ' ') p++;
+    if (*p == '\0') return;
+
+    if (history_count > 0) {
+        size_t newest = (history_next + HISTORY_SIZE - 1) % HISTORY_SIZE;
+        if (strcmp(history[newest], text) == 0) return;
+    }
+
+    strcpy(history[history_next], text);
+    history_next = (history_next + 1) % HISTORY_SIZE;
+    if (history_count < HISTORY_SIZE) history_count++;
+}
+
+/* Entry 0 is the newest command, 1 the one before it, and so on. */
+static const char *history_get(size_t age)
+{
+    return history[(history_next + HISTORY_SIZE - 1 - age) % HISTORY_SIZE];
+}
+
+/* --- line editing ---
+ *
+ * The line lives in 'line', 'length' characters long, with the cursor at
+ * 'pos'. The screen cursor always matches 'pos'. Anything that changes
+ * the middle of the line reprints from there to the end and then walks
+ * the screen cursor back - vga_cursor_left wraps across rows, so a long
+ * line that spills onto the next row still works.
+ *
+ * All of this only ever touches what was typed on this line: the prompt
+ * and anything printed before it are out of reach. */
+
+static size_t length;
+static size_t pos;
+
+static void cursor_back(size_t count)
+{
+    while (count-- > 0) vga_cursor_left();
+}
+
+static void cursor_forward(size_t count)
+{
+    while (count-- > 0) vga_cursor_right();
+}
+
+/* Reprints from 'pos' to the end, blanks 'extra' cells after it (left
+ * over from a line that just got shorter), and returns to 'pos'. */
+static void redraw_tail(size_t extra)
+{
+    for (size_t i = pos; i < length; i++) vga_putchar(line[i]);
+    for (size_t i = 0; i < extra; i++) vga_putchar(' ');
+    cursor_back(length - pos + extra);
+}
+
+static void insert_key(char c)
+{
+    if (length >= LINE_MAX - 1) return;
+
+    memmove(line + pos + 1, line + pos, length - pos);
+    line[pos] = c;
+    length++;
+
+    vga_putchar(c);
+    pos++;
+    redraw_tail(0);
+}
+
+/* Deletes the character under the cursor. */
+static void delete_at_cursor(void)
+{
+    if (pos >= length) return;
+
+    memmove(line + pos, line + pos + 1, length - pos - 1);
+    length--;
+    redraw_tail(1);
+}
+
+/* Replaces the whole line, as when stepping through the history. */
+static void replace_line(const char *text)
+{
+    size_t old = length;
+    size_t i;
+
+    cursor_back(pos);                     /* to the start of the line */
+    pos = 0;
+
+    for (i = 0; text[i] != '\0' && i < LINE_MAX - 1; i++) line[i] = text[i];
+    length = i;
+
+    redraw_tail(old > length ? old - length : 0);
+    cursor_forward(length);
+    pos = length;
+}
+
+/* Reads one line, with the cursor movable by Left, Right, Home and End,
+ * Delete and Backspace working anywhere in it, and Up and Down walking
+ * through the history. */
 static void read_line(void)
 {
-    size_t length = 0;
+    /* How far back in the history we are: 0 is the line being typed,
+     * 1 the newest command, and so on. What was being typed before Up
+     * was first pressed is kept in 'draft' so Down can bring it back. */
+    size_t browsing = 0;
+    static char draft[LINE_MAX];
+
+    length = 0;
+    pos = 0;
 
     for (;;) {
         int key = keyboard_getchar();
@@ -523,27 +639,67 @@ static void read_line(void)
             continue;
         }
 
-        if (key == '\n') {
+        switch (key) {
+        case '\n':
+            cursor_forward(length - pos);
             vga_putchar('\n');
             line[length] = '\0';
+            history_add(line);
             return;
-        }
 
-        if (key == '\b') {
-            if (length > 0) {          /* this is the boundary */
-                length--;
-                vga_putchar('\b');
+        case '\b':
+            if (pos > 0) {                /* this is the boundary */
+                vga_cursor_left();
+                pos--;
+                delete_at_cursor();
             }
-            continue;
+            break;
+
+        case KEY_DELETE:
+            delete_at_cursor();
+            break;
+
+        case KEY_LEFT:
+            if (pos > 0) { vga_cursor_left(); pos--; }
+            break;
+
+        case KEY_RIGHT:
+            if (pos < length) { vga_cursor_right(); pos++; }
+            break;
+
+        case KEY_HOME:
+            cursor_back(pos);
+            pos = 0;
+            break;
+
+        case KEY_END:
+            cursor_forward(length - pos);
+            pos = length;
+            break;
+
+        case KEY_UP:
+            if (browsing < history_count) {
+                if (browsing == 0) {
+                    line[length] = '\0';
+                    strcpy(draft, line);
+                }
+                browsing++;
+                replace_line(history_get(browsing - 1));
+            }
+            break;
+
+        case KEY_DOWN:
+            if (browsing > 0) {
+                browsing--;
+                replace_line(browsing == 0 ? draft : history_get(browsing - 1));
+            }
+            break;
+
+        default:
+            /* Ignore anything else without a character. */
+            if (key >= ' ' && key <= 255) insert_key((char)key);
+            break;
         }
-
-        /* Ignore arrows and anything else without a character, and stop
-         * accepting input once the buffer is full. */
-        if (key > 255 || key < ' ') continue;
-        if (length >= LINE_MAX - 1) continue;
-
-        line[length++] = (char)key;
-        vga_putchar((char)key);
     }
 }
 
