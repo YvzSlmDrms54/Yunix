@@ -12,6 +12,10 @@
 
 #include "seaweed.h"
 
+/* Size of the arena. It has to hold more than one copy of the Fish node
+ * pool, because fish_load() reads the disk into a scratch copy first. */
+#define HEAP_SIZE (1024 * 1024)
+
 void heap_init(void);
 
 #endif

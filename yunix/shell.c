@@ -5,6 +5,7 @@
 #include "yunix.h"
 #include "string.h"
 #include "user.h"
+#include "apps.h"
 
 #define LINE_MAX 256
 
@@ -288,6 +289,8 @@ static void write_common(const char *arg, int appending)
     if (result < 0) fish_fail(appending ? "append" : "write", result);
 }
 
+static void cmd_yvim(const char *arg) { yvim_run(arg); }
+
 static void cmd_write(const char *arg)  { write_common(arg, 0); }
 static void cmd_append(const char *arg) { write_common(arg, 1); }
 
@@ -412,6 +415,7 @@ static const struct command commands[] = {
     { "write",    "<file> <text>",  "write text to a file",              cmd_write    },
     { "append",   "<file> <text>",  "add text to a file",                cmd_append   },
     { "rm",       "<name>",         "delete a file or empty directory",  cmd_rm       },
+    { "yvim",     "<file>",         "edit a file (:wq saves, :q! quits)", cmd_yvim    },
     { "save",     "",               "write the filesystem to disk",      cmd_save     },
     { "load",     "",               "read the filesystem from disk",     cmd_load     },
     { "format",   "yes",            "erase the filesystem and save it",  cmd_format   },

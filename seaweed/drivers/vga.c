@@ -8,8 +8,6 @@
 #include "io.h"
 
 #define VGA_MEMORY  ((volatile uint16_t *)0xB8000)
-#define VGA_WIDTH   80
-#define VGA_HEIGHT  25
 
 /* The CRT controller. You pick a register through 0x3D4, then read or
  * write its value through 0x3D5. */
@@ -160,5 +158,27 @@ void vga_cursor_up(void)
 void vga_cursor_down(void)
 {
     if (row < VGA_HEIGHT - 1) row++;
+    update_cursor();
+}
+/* --- drawing at a fixed place ---
+ *
+ * The calls above all work like a terminal: they write wherever the
+ * cursor is and scroll at the bottom. A full-screen program such as an
+ * editor wants the opposite - to paint any cell it likes and put the
+ * cursor somewhere afterwards. Nothing here scrolls. */
+
+void vga_put_at(size_t x, size_t y, char c, enum vga_color fg, enum vga_color bg)
+{
+    if (x >= VGA_WIDTH || y >= VGA_HEIGHT) return;
+    VGA_MEMORY[y * VGA_WIDTH + x] =
+        entry(c, (uint8_t)((uint8_t)fg | (uint8_t)(bg << 4)));
+}
+
+void vga_move_cursor(size_t x, size_t y)
+{
+    if (x >= VGA_WIDTH)  x = VGA_WIDTH - 1;
+    if (y >= VGA_HEIGHT) y = VGA_HEIGHT - 1;
+    col = x;
+    row = y;
     update_cursor();
 }

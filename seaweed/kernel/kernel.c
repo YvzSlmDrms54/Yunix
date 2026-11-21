@@ -38,7 +38,7 @@ void kernel_main(void)
     vga_write("[ ok ] Interrupts enabled\n");
 
     heap_init();
-    vga_write("[ ok ] Heap ready (256 KiB)\n");
+    vga_write("[ ok ] Heap ready (1 MiB)\n");
 
     fish_init();
     if (ata_init()) {

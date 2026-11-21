@@ -1,4 +1,4 @@
-/* seaweed/fs/fish.c - the Fish filesystem, version 1.1
+/* seaweed/fs/fish.c - the Fish filesystem, version 2
  *
  * A tree of nodes held in one fixed array. Each node knows its parent by
  * index rather than by pointer, which keeps the whole thing relocatable
@@ -277,7 +277,7 @@ void fish_path(char *buffer, size_t size)
 
 /* "FISH" as four bytes, read back as a little-endian number. */
 #define FISH_MAGIC   0x48534946u
-#define FISH_VERSION 1u
+#define FISH_VERSION 2u   /* 2: files grew from 512 to 4096 bytes */
 
 /* The first sector of our area holds this; the nodes follow it. */
 struct superblock {

@@ -31,6 +31,10 @@ void yunix_main(void);
 
 /* --- screen --- */
 
+/* Text mode is 80 columns by 25 rows. */
+#define VGA_WIDTH  80
+#define VGA_HEIGHT 25
+
 enum vga_color {
     VGA_BLACK = 0,      VGA_BLUE = 1,         VGA_GREEN = 2,        VGA_CYAN = 3,
     VGA_RED = 4,        VGA_MAGENTA = 5,      VGA_BROWN = 6,        VGA_LIGHT_GREY = 7,
@@ -48,6 +52,12 @@ void vga_cursor_left(void);
 void vga_cursor_right(void);
 void vga_cursor_up(void);
 void vga_cursor_down(void);
+
+/* For full-screen programs. vga_put_at paints one cell without moving
+ * the cursor or scrolling; cells off the screen are ignored.
+ * vga_move_cursor puts the cursor (and the next vga_putchar) at x, y. */
+void vga_put_at(size_t x, size_t y, char c, enum vga_color fg, enum vga_color bg);
+void vga_move_cursor(size_t x, size_t y);
 
 
 /* --- keyboard --- */
@@ -133,7 +143,7 @@ int ata_present(void);
 
 #define FISH_NAME_MAX   32
 #define FISH_MAX_NODES  64
-#define FISH_FILE_MAX   512
+#define FISH_FILE_MAX   4096
 #define FISH_PATH_MAX   256
 
 /* Return codes. Zero is success, negatives are errors, so callers can

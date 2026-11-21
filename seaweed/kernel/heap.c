@@ -11,7 +11,6 @@
 #include "heap.h"
 #include "string.h"
 
-#define HEAP_SIZE  (256 * 1024)
 #define ALIGNMENT  8
 
 struct block {
