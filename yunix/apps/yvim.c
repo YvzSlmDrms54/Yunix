@@ -542,13 +542,13 @@ static int open_file(const char *name)
     return 1;
 }
 
-void yvim_run(const char *name)
+int yvim_run(const char *name)
 {
     if (name[0] == '\0') {
         vga_write("Usage: yvim <file>\n");
-        return;
+        return 1;
     }
-    if (!open_file(name)) return;
+    if (!open_file(name)) return 1;
 
     cursor = 0;
     top = 0;
@@ -579,4 +579,5 @@ void yvim_run(const char *name)
     /* Hand the screen back to the shell. */
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     vga_clear();
+    return 0;
 }
