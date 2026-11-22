@@ -1,4 +1,4 @@
-/* programs/ringtest.c - checks that ring 3 is really a cage.
+/* programs/raw/ringtest.c - checks that ring 3 is really a cage.
  *
  * It asks the kernel for things it should refuse, spins long enough for
  * timer interrupts to arrive while it runs in ring 3, and at the end

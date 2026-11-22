@@ -11,7 +11,7 @@
 
 #include "gdt.h"
 
-#define GDT_ENTRIES 6
+#define GDT_ENTRIES (GDT_TLS_FIRST + GDT_TLS_COUNT)
 
 static struct gdt_entry   gdt[GDT_ENTRIES];
 static struct gdt_pointer gdt_ptr;
@@ -69,6 +69,29 @@ static void gdt_set_entry(int index, uint32_t base, uint32_t limit,
     gdt[index].granularity |= (uint8_t)(flags & 0xF0);
 
     gdt[index].access      = access;
+}
+
+/* Thread-local storage segments, set by the set_thread_area system call.
+ * A program points gs (or fs) at one; its base is where that program's
+ * thread-local variables live. Same slots as Linux: entries 6 to 8. */
+int gdt_set_tls(int index, uint32_t base, uint32_t limit, int limit_in_pages, int present)
+{
+    if (index < GDT_TLS_FIRST || index >= GDT_TLS_FIRST + GDT_TLS_COUNT) return -1;
+
+    if (!present) {
+        gdt_set_entry(index, 0, 0, 0, 0);
+        return 0;
+    }
+
+    /* 0xF2: present, ring 3, writable data. Flags: 32-bit, and 4 KiB
+     * granularity if the limit counts pages. */
+    gdt_set_entry(index, base, limit, 0xF2, (uint8_t)(0x40 | (limit_in_pages ? 0x80 : 0)));
+    return 0;
+}
+
+void gdt_clear_tls(void)
+{
+    for (int i = GDT_TLS_FIRST; i < GDT_TLS_FIRST + GDT_TLS_COUNT; i++) gdt_set_entry(i, 0, 0, 0, 0);
 }
 
 void gdt_init(void)

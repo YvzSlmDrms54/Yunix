@@ -1,31 +1,16 @@
-/* programs/hello.c - the first ring 3 program.
+/* programs/hello.c - an ordinary C program.
  *
- * No C library yet, so it makes its two system calls by hand, the way
- * any 32-bit Linux program does underneath: number in EAX, arguments in
- * EBX, ECX, EDX, then "int $0x80". Because of that, the very same file
- * runs on Linux too.
+ * Nothing in here knows about Yunix: it is plain C with stdio, built
+ * against musl, and the same file runs on Linux. That it runs on Yunix
+ * too is the whole point - Seaweed answers the Linux system calls musl
+ * makes underneath.
  */
 
-static int sys_write(int fd, const char *text, int length)
-{
-    int result;
-    __asm__ volatile ("int $0x80"
-                      : "=a"(result)
-                      : "a"(4), "b"(fd), "c"(text), "d"(length)
-                      : "memory");
-    return result;
-}
+#include <stdio.h>
 
-static void sys_exit(int status)
+int main(int argc, char **argv)
 {
-    __asm__ volatile ("int $0x80" : : "a"(1), "b"(status));
-    for (;;) { }
-}
-
-void _start(void)
-{
-    static const char message[] = "Hello from ring 3!\n";
-
-    sys_write(1, message, sizeof(message) - 1);
-    sys_exit(0);
+    printf("Hello from musl on Yunix!\n");
+    printf("I am %s, and I got %d argument%s.\n", argv[0], argc, argc == 1 ? "" : "s");
+    return 0;
 }

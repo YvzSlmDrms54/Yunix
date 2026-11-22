@@ -103,11 +103,11 @@ isr_common_stub:
     mov %ds, %ax
     push %eax               /* remember the old data segment */
 
+    /* Kernel data in ds and es. Not fs and gs: the kernel never uses
+     * them, and a ring 3 program keeps its thread-local storage in gs. */
     mov $0x10, %ax          /* switch to kernel data segment */
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     push %esp               /* pass a pointer to the saved registers */
     call isr_handler
@@ -116,8 +116,6 @@ isr_common_stub:
     pop %eax                /* restore the old data segment */
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     popa
     add $8, %esp            /* drop int_no and err_code */
@@ -132,8 +130,6 @@ irq_common_stub:
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     push %esp
     call irq_handler
@@ -142,8 +138,6 @@ irq_common_stub:
     pop %eax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     popa
     add $8, %esp

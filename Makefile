@@ -44,21 +44,64 @@ OBJS    = $(patsubst %.s,build/%.o,$(ASRC)) \
           $(patsubst %.c,build/%.o,$(KSRC)) \
           $(patsubst %.c,build/%.o,$(YSRC))
 
-# Programs: static 32-bit ELF files that run in ring 3 and talk to the
-# kernel with Linux's system calls - so each one also runs on Linux.
-# No C library yet, hence -nostdlib and _start instead of main. -no-pie
-# gives a plain executable at a fixed address, the only kind the loader
-# takes so far.
-PROGRAM_CFLAGS = -m32 -march=i686 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector \
-                 -fno-pie -no-pie -static -nostdlib
-PROGRAM_SRC    = $(wildcard programs/*.c)
-PROGRAMS       = $(patsubst programs/%.c,build/programs/%.elf,$(PROGRAM_SRC))
+# --- programs ---
+#
+# Static 32-bit ELF files that run in ring 3 and talk to the kernel with
+# Linux's system calls - so each one also runs on Linux. -no-pie gives a
+# plain executable at a fixed address, the only kind the loader takes so
+# far. No SSE: Seaweed does not switch it on, so those instructions would
+# fault.
+#
+#   programs/*.c       ordinary C with main(), built against musl
+#   programs/raw/*.c   no C library at all: _start and int $0x80 by hand
+PROGRAM_ARCH   = -m32 -march=i686 -mno-sse -mno-sse2 -mno-mmx
+PROGRAM_CFLAGS = $(PROGRAM_ARCH) -O2 -Wall -Wextra -fno-pie -no-pie -static
+
+RAW_SRC        = $(wildcard programs/raw/*.c)
+MUSL_SRC       = $(wildcard programs/*.c)
+PROGRAMS       = $(patsubst programs/raw/%.c,build/programs/%.elf,$(RAW_SRC)) \
+                 $(patsubst programs/%.c,build/programs/%.elf,$(MUSL_SRC))
+
+# musl, the C library: built from source into build/musl, so nothing has
+# to be installed system-wide. The download is checked against musl's
+# published SHA-256 before anything is built from it.
+MUSL_VERSION   = 1.2.5
+MUSL_SHA256    = a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4
+MUSL_TAR       = build/musl-$(MUSL_VERSION).tar.gz
+MUSL_PREFIX    = $(CURDIR)/build/musl
+MUSL_SPECS     = build/musl/lib/musl-gcc.specs
 
 all: $(KERNEL) $(PROGRAMS)
 
-build/programs/%.elf: programs/%.c
+$(MUSL_TAR):
+	@mkdir -p build
+	curl -fsSL -o $@.part https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz
+	echo "$(MUSL_SHA256)  $@.part" | sha256sum -c --quiet -
+	mv $@.part $@
+
+$(MUSL_SPECS): $(MUSL_TAR)
+	rm -rf build/musl-src && mkdir -p build/musl-src
+	tar -xzf $(MUSL_TAR) -C build/musl-src --strip-components=1
+	@# --target=i386 picks the architecture; the host's gcc does the work
+	@# with -m32, and the host's ar and ranlib (not "i386-ar") pack it up.
+	cd build/musl-src && ./configure --prefix=$(MUSL_PREFIX) --target=i386 \
+	    --disable-shared --enable-wrapper=gcc \
+	    CC="gcc $(PROGRAM_ARCH)" > /dev/null
+	$(MAKE) -C build/musl-src -j4 AR=ar RANLIB=ranlib > /dev/null
+	$(MAKE) -C build/musl-src install AR=ar RANLIB=ranlib > /dev/null
+	@echo "Built musl $(MUSL_VERSION) into build/musl"
+
+musl: $(MUSL_SPECS)
+
+build/programs/%.elf: programs/raw/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(PROGRAM_CFLAGS) -o $@ $<
+	$(CC) $(PROGRAM_CFLAGS) -ffreestanding -fno-stack-protector -nostdlib -o $@ $<
+
+build/programs/%.elf: programs/%.c $(MUSL_SPECS)
+	@mkdir -p $(dir $@)
+	@# musl's specs file replaces gcc's link rule, dropping the "32-bit" it
+	@# would pass to the linker - so say it again.
+	$(CC) $(PROGRAM_CFLAGS) -specs $(MUSL_SPECS) -Wl,-m,elf_i386 -o $@ $<
 
 programs: $(PROGRAMS)
 
@@ -136,7 +179,14 @@ $(ISO): $(KERNEL) grub.cfg grub $(PROGRAMS)
 
 iso: $(ISO)
 
+# Keeps the built musl and its download: rebuilding them takes minutes
+# and needs the internet. "make distclean" removes those too.
 clean:
+	if [ -d build ]; then find build -mindepth 1 -maxdepth 1 ! -name musl \
+	    ! -name 'musl-*.tar.gz' -exec rm -rf {} +; fi
+	rm -rf $(KERNEL) $(ISO) iso
+
+distclean:
 	rm -rf build $(KERNEL) $(ISO) iso
 
-.PHONY: all run run-gui iso grub programs clean
+.PHONY: all run run-gui iso grub programs musl clean distclean

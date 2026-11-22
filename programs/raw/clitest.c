@@ -1,4 +1,4 @@
-/* programs/clitest.c - tries an instruction only the kernel may use.
+/* programs/raw/clitest.c - tries an instruction only the kernel may use.
  *
  * "cli" turns interrupts off. In ring 3 the CPU refuses it with a
  * general protection fault, and Yunix must stop the program - otherwise

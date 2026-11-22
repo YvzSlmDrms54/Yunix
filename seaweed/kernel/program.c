@@ -22,6 +22,7 @@
 #include "paging.h"
 #include "multiboot.h"
 #include "string.h"
+#include "gdt.h"
 
 #define PAGE            4096u
 #define POOL_PAGES      256u               /* 1 MiB for code, data and heap */
@@ -41,6 +42,11 @@
 #define AT_PHNUM        5
 #define AT_PAGESZ       6
 #define AT_ENTRY        9
+#define AT_UID          11
+#define AT_EUID         12
+#define AT_GID          13
+#define AT_EGID         14
+#define AT_SECURE       23
 #define AT_RANDOM       25
 
 struct elf_header {
@@ -237,6 +243,14 @@ static uint32_t build_stack(const char *name, const uint8_t *file, uint32_t entr
     }
     words[n++] = AT_PAGESZ; words[n++] = PAGE;
     words[n++] = AT_ENTRY;  words[n++] = entry;
+    /* Who the program runs as: root, for now. Saying so matters - musl
+     * treats a program that does not learn its user ids as possibly
+     * privileged, and then probes its file descriptors with poll(). */
+    words[n++] = AT_UID;    words[n++] = 0;
+    words[n++] = AT_EUID;   words[n++] = 0;
+    words[n++] = AT_GID;    words[n++] = 0;
+    words[n++] = AT_EGID;   words[n++] = 0;
+    words[n++] = AT_SECURE; words[n++] = 0;
     words[n++] = AT_RANDOM; words[n++] = random_address;
     words[n++] = AT_NULL;   words[n++] = 0;
 
@@ -272,11 +286,13 @@ int program_run(const char *name)
 
     running = 1;
     running_name = name;
+    __asm__ volatile ("fninit");            /* a clean FPU for each program */
     status = user_enter(entry, sp);
     running = 0;
     running_name = 0;
 
     paging_unmap_user();
+    gdt_clear_tls();
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     return (int)(status & 0xFF);
 }

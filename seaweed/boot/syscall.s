@@ -26,11 +26,12 @@ syscall_stub:
     mov %ds, %ax
     push %eax
 
-    mov $0x10, %ax          /* kernel data segments */
+    /* Kernel data segments in ds and es only. fs and gs stay as they are:
+     * the kernel never uses them, and a program keeps its thread-local
+     * storage segment there - overwriting gs would lose it. */
+    mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     push %esp
     call syscall_handler
@@ -39,8 +40,6 @@ syscall_stub:
     pop %eax
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
 
     popa                    /* EAX comes back as the handler set it */
     add $8, %esp
@@ -82,8 +81,8 @@ user_enter:
     mov $0x23, %ax          /* user data segment, privilege 3 */
     mov %ax, %ds
     mov %ax, %es
-    mov %ax, %fs
-    mov %ax, %gs
+    mov %ax, %fs            /* the program may point fs/gs at its own */
+    mov %ax, %gs            /* thread-local storage later */
 
     /* iret pops EIP, CS, EFLAGS - and, because CS says ring 3, also ESP
      * and SS. So build that frame and let iret do the jump. */

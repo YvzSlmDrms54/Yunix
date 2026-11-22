@@ -139,6 +139,26 @@ static void write_disk_name(int index)
     }
 }
 
+/* The x87 floating-point unit, for programs: C libraries use it for
+ * anything with float or double, printf included. The kernel itself is
+ * built without it (-mno-80387), so only ring 3 ever touches it.
+ *
+ *   CR0.EM (bit 2) off  - really run FPU instructions, do not trap them
+ *   CR0.MP (bit 1) on   - and let WAIT/FWAIT see the task-switch flag
+ *   CR0.NE (bit 5) on   - report FPU errors as exception 16, the modern way
+ *   CR0.TS (bit 3) off  - no lazy saving: one program at a time, so far
+ */
+static void fpu_init(void)
+{
+    uint32_t cr0;
+
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~((1u << 2) | (1u << 3));
+    cr0 |= (1u << 1) | (1u << 5);
+    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0));
+    __asm__ volatile ("fninit");
+}
+
 /* boot.s passes what the boot loader left in EAX and EBX. */
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info)
 {
@@ -151,6 +171,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info)
     vga_write("Seaweed v" SEAWEED_VERSION "\n\n");
 
     gdt_init();
+    fpu_init();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("[ ok ] GDT loaded\n");
 

@@ -12,6 +12,10 @@
 #define GDT_USER_DATA   0x20
 #define GDT_TSS         0x28
 
+/* GDT entries 6-8 are for thread-local storage, as on Linux. */
+#define GDT_TLS_FIRST   6
+#define GDT_TLS_COUNT   3
+
 /* A selector's low two bits are the privilege level it asks for, so
  * ring 3 loads the user selectors with 3 added: 0x1B and 0x23. */
 #define GDT_USER_CODE_RPL3 (GDT_USER_CODE | 3)
@@ -41,6 +45,11 @@ struct gdt_pointer {
 } __attribute__((packed));
 
 void gdt_init(void);
+
+/* Sets or clears one thread-local storage entry. Returns -1 for an index
+ * outside entries 6-8. */
+int  gdt_set_tls(int index, uint32_t base, uint32_t limit, int limit_in_pages, int present);
+void gdt_clear_tls(void);
 
 /* The kernel stack the CPU switches to when ring 3 is interrupted. */
 void tss_set_kernel_stack(uint32_t esp0);

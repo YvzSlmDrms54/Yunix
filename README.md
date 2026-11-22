@@ -18,6 +18,10 @@ CD.
 - **The Yunix shell:** 30+ commands, line editing with the arrow keys, command
   history, `&&` / `||` / `;` chaining
 - **yvim:** a small vi-style text editor
+- **Programs in ring 3:** ordinary C programs built against the musl C library
+  run as separate, protected programs. Seaweed answers the 32-bit Linux system
+  calls, so the same binary runs on Linux and on Yunix - and a crashing
+  program is stopped while Yunix keeps going
 - **An installer** that puts Yunix on a disk with GRUB
 
 ## Minimum system requirements
@@ -76,7 +80,13 @@ make iso
 ```
 
 This will make the ISO for you to put into VirtualBox or VMWare. Besides the
-kernel, it carries the two pieces of GRUB that `install` writes to a disk.
+kernel, it carries the two pieces of GRUB that `install` writes to a disk, and
+the programs from `programs/`.
+
+The first build also downloads [musl](https://musl.libc.org), the C library
+programs are built with (about 1 MB, checked against its published SHA-256),
+and compiles it into `build/musl`. That takes a few minutes, once: `make clean`
+keeps it, and only `make distclean` removes it.
 
 ### **3. Run in QEMU**
 
@@ -112,6 +122,7 @@ Type `help` for every command (`help 2` for the second page). A few to start wit
 | `format yes` | Make a Fish partition on a blank disk and start empty |
 | `partition` | Show partitions and free space; `partition new <n>` makes a Fish partition there |
 | `install` | Install Yunix on a disk (see below) |
+| `run` / `run <name>` | List the programs, or run one (try `run hello`) |
 | `pci`, `uptime`, `neofetch`, `user`, `hostname` | Look around and personalise |
 
 ↑ and ↓ go through earlier commands, ← and → move inside the line, and
