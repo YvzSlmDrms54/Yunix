@@ -204,6 +204,31 @@ int disk_select(int index);
 int ata_present(void);
 
 
+/* --- programs ---
+ *
+ * Programs are static 32-bit ELF files, the kind Linux runs, and they
+ * run in ring 3: they cannot touch the kernel, and if one crashes, it is
+ * stopped and Yunix carries on. They talk to Seaweed with Linux's system
+ * calls. For now they come with the boot loader (the ISO); later from
+ * Fish. */
+
+int program_count(void);
+const char *program_name(int index);          /* NULL past the end */
+
+/* Runs a program and waits for it. Returns its exit status (0-255, or
+ * 128 + signal number if it was killed for crashing), or a negative
+ * PROGRAM_ERR_* code if it could not start. */
+int program_run(const char *name);
+const char *program_error(int code);
+
+#define PROGRAM_OK               0
+#define PROGRAM_ERR_NOT_FOUND   -1
+#define PROGRAM_ERR_NOT_ELF     -2
+#define PROGRAM_ERR_UNSUPPORTED -3   /* e.g. a PIE or dynamically linked file */
+#define PROGRAM_ERR_TOO_BIG     -4
+#define PROGRAM_ERR_BUSY        -5
+
+
 /* --- installing ---
  *
  * Puts Yunix on a disk so it starts without the CD or USB stick: GRUB's

@@ -36,6 +36,8 @@ extern void irq9(void);  extern void irq10(void); extern void irq11(void);
 extern void irq12(void); extern void irq13(void); extern void irq14(void);
 extern void irq15(void);
 
+extern void syscall_stub(void);   /* boot/syscall.s */
+
 static void idt_set_gate(uint8_t num, uint32_t handler,
                          uint16_t selector, uint8_t flags)
 {
@@ -134,6 +136,13 @@ void idt_init(void)
     idt_set_gate(45, (uint32_t)irq13, 0x08, 0x8E);
     idt_set_gate(46, (uint32_t)irq14, 0x08, 0x8E);
     idt_set_gate(47, (uint32_t)irq15, 0x08, 0x8E);
+
+    /* int 0x80, the system call - the same number Linux uses on 32-bit
+     * x86. 0xEE instead of 0x8E: the gate's privilege level is 3, so
+     * ring 3 code may raise it with an int instruction. Every other gate
+     * stays at 0, and a program that tries "int 14" gets a protection
+     * fault instead of faking a page fault. */
+    idt_set_gate(0x80, (uint32_t)syscall_stub, 0x08, 0xEE);
 
     idt_flush((uint32_t)&idt_ptr);
 }

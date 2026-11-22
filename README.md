@@ -25,7 +25,7 @@ CD.
 | | Minimum | Recommended |
 |---|---|---|
 | **CPU** | 32-bit x86, i686 class (Pentium Pro or later) | Any x86 or x86-64 CPU |
-| **RAM** | 4 MB | 16 MB or more |
+| **RAM** | 8 MB | 16 MB or more |
 | **Firmware** | Legacy BIOS, or UEFI with CSM / Legacy boot enabled | |
 | **Display** | VGA-compatible, 80×25 text mode | |
 | **Keyboard** | PS/2, or USB with "USB legacy support" in the BIOS | |

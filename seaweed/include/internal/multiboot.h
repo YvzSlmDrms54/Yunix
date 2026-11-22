@@ -17,4 +17,8 @@ void multiboot_init(uint32_t magic, uint32_t info);
  * size in 'size_out', or NULL if there is no such module. */
 const void *multiboot_module(const char *name, size_t *size_out);
 
+/* For listing them: how many there are, and the name of each. */
+int multiboot_module_count(void);
+const char *multiboot_module_name(int index);
+
 #endif

@@ -22,6 +22,27 @@ void paging_init(void);
  * pointer. Returns NULL if it cannot (page 0, or out of page tables). */
 void *paging_map_device(uint32_t physical, uint32_t size);
 
+/* The two windows a ring 3 program lives in - see paging.c. */
+#define PAGING_USER_CODE_START  0x08000000u
+#define PAGING_USER_CODE_END    0x08400000u
+#define PAGING_USER_STACK_START 0xBFC00000u
+#define PAGING_USER_STACK_END   0xC0000000u
+
+/* Maps one page of a program's memory, user-accessible and writable.
+ * Both addresses must be page-aligned, and the virtual one inside a
+ * window. Returns 0, or -1 if not. */
+int paging_map_user(uint32_t virtual_page, uint32_t physical_page);
+
+/* Where a program address really is, or 0 if it is not mapped. */
+uint32_t paging_user_physical(uint32_t virtual_address);
+
+/* 1 if every byte of [address, address + size) is mapped for the
+ * program. System calls check every pointer a program hands them. */
+int paging_user_range_ok(uint32_t address, uint32_t size);
+
+/* Removes every program page. */
+void paging_unmap_user(void);
+
 /* The address that caused the last page fault. The CPU leaves it in the
  * CR2 register. */
 uint32_t paging_fault_address(void);

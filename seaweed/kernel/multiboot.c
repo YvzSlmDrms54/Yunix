@@ -107,3 +107,14 @@ const void *multiboot_module(const char *name, size_t *size_out)
     }
     return 0;
 }
+
+int multiboot_module_count(void)
+{
+    return module_count;
+}
+
+const char *multiboot_module_name(int index)
+{
+    if (index < 0 || index >= module_count) return 0;
+    return modules[index].name;
+}

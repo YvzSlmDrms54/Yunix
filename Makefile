@@ -44,7 +44,23 @@ OBJS    = $(patsubst %.s,build/%.o,$(ASRC)) \
           $(patsubst %.c,build/%.o,$(KSRC)) \
           $(patsubst %.c,build/%.o,$(YSRC))
 
-all: $(KERNEL)
+# Programs: static 32-bit ELF files that run in ring 3 and talk to the
+# kernel with Linux's system calls - so each one also runs on Linux.
+# No C library yet, hence -nostdlib and _start instead of main. -no-pie
+# gives a plain executable at a fixed address, the only kind the loader
+# takes so far.
+PROGRAM_CFLAGS = -m32 -march=i686 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector \
+                 -fno-pie -no-pie -static -nostdlib
+PROGRAM_SRC    = $(wildcard programs/*.c)
+PROGRAMS       = $(patsubst programs/%.c,build/programs/%.elf,$(PROGRAM_SRC))
+
+all: $(KERNEL) $(PROGRAMS)
+
+build/programs/%.elf: programs/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(PROGRAM_CFLAGS) -o $@ $<
+
+programs: $(PROGRAMS)
 
 build/seaweed/%.o: seaweed/%.s
 	@mkdir -p $(dir $@)
@@ -89,23 +105,32 @@ $(GRUB_BOOT_IMG): $(GRUB_DIR)/boot.img
 
 grub: $(GRUB_CORE_IMG) $(GRUB_BOOT_IMG)
 
-# The modules "install" needs: the kernel itself and GRUB's two pieces.
-# The live ISO's grub.cfg loads the same three.
-MODULES = $(KERNEL) seaweed.bin,$(GRUB_BOOT_IMG) boot.img,$(GRUB_CORE_IMG) core.img
+# What the boot loader hands the kernel: the kernel itself and GRUB's two
+# pieces (for "install"), and every program. The live ISO's grub.cfg loads
+# the same files.
+MODULES = $(KERNEL) seaweed.bin,$(GRUB_BOOT_IMG) boot.img,$(GRUB_CORE_IMG) core.img$(foreach p,$(PROGRAMS),,$(p) $(basename $(notdir $(p))))
 
-run: $(KERNEL) $(DISK) grub
+run: $(KERNEL) $(DISK) grub $(PROGRAMS)
 	qemu-system-i386 -kernel $(KERNEL) -initrd "$(MODULES)" \
 	    -drive file=$(DISK),format=raw,if=ide -display curses
 
-run-gui: $(KERNEL) grub
+run-gui: $(KERNEL) grub $(PROGRAMS)
 	qemu-system-i386 -kernel $(KERNEL) -initrd "$(MODULES)"
 
-$(ISO): $(KERNEL) grub.cfg grub
-	mkdir -p iso/boot/grub
+$(ISO): $(KERNEL) grub.cfg grub $(PROGRAMS)
+	rm -rf iso
+	mkdir -p iso/boot/grub iso/boot/programs
 	cp $(KERNEL) iso/boot/$(KERNEL)
 	cp $(GRUB_BOOT_IMG) iso/boot/grub-boot.img
 	cp $(GRUB_CORE_IMG) iso/boot/grub-core.img
-	cp grub.cfg iso/boot/grub/grub.cfg
+	cp $(PROGRAMS) iso/boot/programs/
+	@# grub.cfg with one "module" line per program in place of the line
+	@# that says @PROGRAMS@.
+	{ sed '/@PROGRAMS@/,$$d' grub.cfg; \
+	  for p in $(PROGRAMS); do \
+	      n=$$(basename $$p .elf); echo "    module /boot/programs/$$n.elf $$n"; \
+	  done; \
+	  sed '1,/@PROGRAMS@/d' grub.cfg; } > iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso 2>/dev/null
 	@echo "Built $(ISO)"
 
@@ -114,4 +139,4 @@ iso: $(ISO)
 clean:
 	rm -rf build $(KERNEL) $(ISO) iso
 
-.PHONY: all run run-gui iso grub clean
+.PHONY: all run run-gui iso grub programs clean

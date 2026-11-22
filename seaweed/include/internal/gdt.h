@@ -10,6 +10,12 @@
 #define GDT_KERNEL_DATA 0x10
 #define GDT_USER_CODE   0x18
 #define GDT_USER_DATA   0x20
+#define GDT_TSS         0x28
+
+/* A selector's low two bits are the privilege level it asks for, so
+ * ring 3 loads the user selectors with 3 added: 0x1B and 0x23. */
+#define GDT_USER_CODE_RPL3 (GDT_USER_CODE | 3)
+#define GDT_USER_DATA_RPL3 (GDT_USER_DATA | 3)
 
 /* One GDT entry, exactly 8 bytes.
  *
@@ -35,5 +41,8 @@ struct gdt_pointer {
 } __attribute__((packed));
 
 void gdt_init(void);
+
+/* The kernel stack the CPU switches to when ring 3 is interrupted. */
+void tss_set_kernel_stack(uint32_t esp0);
 
 #endif

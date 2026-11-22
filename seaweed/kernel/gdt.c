@@ -11,10 +11,31 @@
 
 #include "gdt.h"
 
-#define GDT_ENTRIES 5
+#define GDT_ENTRIES 6
 
 static struct gdt_entry   gdt[GDT_ENTRIES];
 static struct gdt_pointer gdt_ptr;
+
+/* The Task State Segment. x86 once used it for hardware task switching,
+ * which nobody does any more; what is left that matters is one job: when
+ * an interrupt or a system call arrives while a ring 3 program runs, the
+ * CPU must switch to a kernel stack - the program's own stack cannot be
+ * trusted - and it takes that stack's address from here (ss0:esp0). */
+struct tss {
+    uint32_t prev_task;
+    uint32_t esp0, ss0;           /* the kernel stack for ring 3 -> ring 0 */
+    uint32_t esp1, ss1, esp2, ss2;
+    uint32_t cr3, eip, eflags, eax, ecx, edx, ebx, esp, ebp, esi, edi;
+    uint32_t es, cs, ss, ds, fs, gs, ldt;
+    uint16_t trap, iomap_base;
+} __attribute__((packed));
+
+static struct tss tss;
+
+void tss_set_kernel_stack(uint32_t esp0)
+{
+    tss.esp0 = esp0;
+}
 
 /* Implemented in boot/gdt_flush.s */
 extern void gdt_flush(uint32_t gdt_ptr_address);
@@ -65,5 +86,15 @@ void gdt_init(void)
     gdt_set_entry(3, 0, 0xFFFFF, 0xFA, 0xC0);  /* user code,   ring 3 */
     gdt_set_entry(4, 0, 0xFFFFF, 0xF2, 0xC0);  /* user data,   ring 3 */
 
+    /* The TSS is a system entry: 0x89 = present, ring 0, "32-bit TSS,
+     * not busy". Its limit counts bytes, so no granularity flag. An I/O
+     * map offset past the end means no I/O ports for ring 3 at all. */
+    tss.ss0 = GDT_KERNEL_DATA;
+    tss.iomap_base = sizeof(tss);
+    gdt_set_entry(5, (uint32_t)&tss, sizeof(tss) - 1, 0x89, 0x00);
+
     gdt_flush((uint32_t)&gdt_ptr);
+
+    /* Tell the CPU which GDT entry is the TSS. */
+    __asm__ volatile ("ltr %0" : : "r"((uint16_t)GDT_TSS));
 }

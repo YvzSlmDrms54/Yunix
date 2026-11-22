@@ -7,6 +7,7 @@
 #include "io.h"
 #include "vga.h"
 #include "paging.h"
+#include "program.h"
 
 static const char *exception_names[32] = {
     "Divide by zero",          "Debug",
@@ -68,9 +69,35 @@ static void explain_page_fault(uint32_t err_code)
     vga_putchar('\n');
 }
 
+/* A ring 3 program broke a rule: the kernel itself is fine, so stop the
+ * program - with the status Linux would give it - and carry on. */
+static void kill_program(struct registers *regs)
+{
+    uint32_t status = STATUS_SIGSEGV;
+
+    if (regs->int_no == 0)  status = STATUS_SIGFPE;     /* divide by zero */
+    if (regs->int_no == 6)  status = STATUS_SIGILL;     /* invalid opcode */
+
+    vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    vga_write("\n");
+    vga_write(program_current_name());
+    vga_write(" was stopped: ");
+    vga_write(regs->int_no < 32 ? exception_names[regs->int_no] : "unknown exception");
+    vga_write(" at ");
+    write_hex(regs->eip);
+    vga_putchar('\n');
+    if (regs->int_no == 14) explain_page_fault(regs->err_code);
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    program_end(status);
+}
+
 /* Called for CPU exceptions (interrupts 0-31). */
 void isr_handler(struct registers *regs)
 {
+    /* The low two bits of the saved CS say which ring was running. */
+    if ((regs->cs & 3) == 3 && program_running()) kill_program(regs);
+
     vga_set_color(VGA_WHITE, VGA_RED);
     vga_write("\n*** KERNEL PANIC ***\n");
 

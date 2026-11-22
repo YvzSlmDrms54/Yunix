@@ -887,6 +887,50 @@ static int cmd_pci(const char *arg)
     return 0;
 }
 
+/* ---- programs ---- */
+
+/* run          - list the programs that came with Yunix
+ * run <name>   - run one in ring 3 and wait for it
+ *
+ * The command's own status is the program's exit status, so
+ * "run hello && echo it worked" does what it says. */
+static int cmd_run(const char *arg)
+{
+    int status;
+
+    if (arg[0] == '\0') {
+        if (program_count() == 0) {
+            vga_write("No programs came with this boot. They come on the ISO.\n");
+            return 1;
+        }
+        vga_write("Programs:");
+        for (int i = 0; i < program_count(); i++) {
+            vga_write("  ");
+            vga_write(program_name(i));
+        }
+        vga_write("\nType: run <name>\n");
+        return 0;
+    }
+
+    status = program_run(arg);
+    if (status < 0) {
+        vga_write("run: ");
+        vga_write(program_error(status));
+        vga_putchar('\n');
+        return 1;
+    }
+
+    /* Like other shells: only mention the status when it is not 0. */
+    if (status != 0) {
+        vga_write("[");
+        vga_write(arg);
+        vga_write(" ended with status ");
+        write_number((uint32_t)status);
+        vga_write("]\n");
+    }
+    return status;
+}
+
 /* ---- installing ---- */
 
 /* install              - which disks Yunix could be installed on
@@ -1070,6 +1114,7 @@ static const struct command commands[] = {
     { "disk",     "[n [yes]]",      "list disks, or move Fish to disk n", cmd_disk    },
     { "partition", "[new <n>]",     "partitions, free space, new Fish",  cmd_partition },
     { "pci",      "[n]",            "list PCI devices, or show one",     cmd_pci      },
+    { "run",      "[name]",         "run a program in ring 3",           cmd_run      },
     { "install",  "[n [yes]]",      "install Yunix on disk n",           cmd_install  },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },
     { "whoami",   "",               "print the current user name",       cmd_whoami   },

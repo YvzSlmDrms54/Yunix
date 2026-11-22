@@ -119,6 +119,81 @@ void *paging_map_device(uint32_t physical, uint32_t size)
     return (void *)physical;
 }
 
+/* --- program memory ---
+ *
+ * A ring 3 program gets two windows of its own, at the addresses a
+ * 32-bit Linux program expects:
+ *
+ *     0x08000000 - 0x083FFFFF   code, data and heap (loaded from 0x08048000)
+ *     0xBFC00000 - 0xBFFFFFFF   the stack, growing down from 0xC0000000
+ *
+ * Each window is one page table. Its entries, and the directory entries
+ * pointing to them, carry the "user" bit - which no kernel page has, so a
+ * program that reaches for kernel memory gets a page fault. */
+
+#define PAGE_USER          0x004
+#define USER_TABLES        2
+
+static uint32_t user_tables[USER_TABLES][ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+
+static int user_window(uint32_t address)
+{
+    if ((address >> 22) == (PAGING_USER_CODE_START >> 22))  return 0;
+    if ((address >> 22) == (PAGING_USER_STACK_START >> 22)) return 1;
+    return -1;
+}
+
+int paging_map_user(uint32_t virtual_page, uint32_t physical_page)
+{
+    int w = user_window(virtual_page);
+    uint32_t d = virtual_page >> 22;
+
+    if (w < 0 || (virtual_page & (PAGE_SIZE - 1)) || (physical_page & (PAGE_SIZE - 1))) return -1;
+
+    page_directory[d] = (uint32_t)user_tables[w] | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    user_tables[w][(virtual_page >> 12) & (ENTRIES - 1)] =
+        physical_page | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virtual_page) : "memory");
+    return 0;
+}
+
+uint32_t paging_user_physical(uint32_t virtual_address)
+{
+    int w = user_window(virtual_address);
+    uint32_t entry;
+
+    if (w < 0) return 0;
+    entry = user_tables[w][(virtual_address >> 12) & (ENTRIES - 1)];
+    if (!(entry & PAGE_PRESENT)) return 0;
+    return (entry & ~(uint32_t)(PAGE_SIZE - 1)) | (virtual_address & (PAGE_SIZE - 1));
+}
+
+void paging_unmap_user(void)
+{
+    for (int w = 0; w < USER_TABLES; w++) {
+        for (uint32_t i = 0; i < ENTRIES; i++) user_tables[w][i] = 0;
+    }
+    page_directory[PAGING_USER_CODE_START >> 22] = 0;
+    page_directory[PAGING_USER_STACK_START >> 22] = 0;
+
+    /* Reloading CR3 makes the CPU forget every translation at once. */
+    __asm__ volatile ("mov %%cr3, %%eax; mov %%eax, %%cr3" : : : "eax", "memory");
+}
+
+int paging_user_range_ok(uint32_t address, uint32_t size)
+{
+    uint32_t page;
+
+    if (size == 0) return 1;
+    if (address + size < address) return 0;             /* wraps around */
+
+    for (page = address & ~(uint32_t)(PAGE_SIZE - 1); page < address + size; page += PAGE_SIZE) {
+        if (paging_user_physical(page) == 0) return 0;
+        if (page + PAGE_SIZE < page) break;
+    }
+    return 1;
+}
+
 uint32_t paging_fault_address(void)
 {
     uint32_t address;
