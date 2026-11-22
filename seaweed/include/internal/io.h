@@ -33,6 +33,21 @@ static inline uint16_t inw(uint16_t port)
     return result;
 }
 
+/* And the 32-bit versions. PCI configuration space is reached through a
+ * 32-bit address port: writing it one byte at a time does not work. */
+
+static inline void outl(uint16_t port, uint32_t value)
+{
+    __asm__ volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
+}
+
+static inline uint32_t inl(uint16_t port)
+{
+    uint32_t result;
+    __asm__ volatile ("inl %1, %0" : "=a"(result) : "Nd"(port));
+    return result;
+}
+
 /* Some old devices need a moment to react. Writing to port 0x80 is a
  * traditional way to waste exactly the right amount of time. */
 static inline void io_wait(void)

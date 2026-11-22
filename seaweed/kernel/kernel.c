@@ -15,6 +15,7 @@
 #include "ata.h"
 #include "heap.h"
 #include "partition.h"
+#include "pci.h"
 #include "string.h"
 
 /* Prints a sector count as whole MiB (2048 sectors of 512 bytes each). */
@@ -25,6 +26,38 @@ static void write_mib(uint32_t sectors)
     utoa(sectors / 2048, buffer, 10);
     vga_write(buffer);
     vga_write(" MiB");
+}
+
+/* Two hex digits, as in a PCI address like 00:1f.2. */
+static void write_hex2(uint8_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+
+    vga_putchar(digits[value >> 4]);
+    vga_putchar(digits[value & 0xF]);
+}
+
+/* One boot line: how many PCI devices there are, and where the AHCI
+ * controller is, since that is the one the next disk driver will need. */
+static void report_pci(void)
+{
+    const struct pci_device *ahci = pci_find(0x01, 0x06, 0x01);
+    char buffer[12];
+
+    vga_write("[ ok ] PCI: ");
+    utoa((unsigned int)pci_found(), buffer, 10);
+    vga_write(buffer);
+    vga_write(pci_found() == 1 ? " device" : " devices");
+
+    if (ahci != 0) {
+        vga_write(", AHCI controller at ");
+        write_hex2(ahci->bus);
+        vga_putchar(':');
+        write_hex2(ahci->slot);
+        vga_putchar('.');
+        vga_putchar((char)('0' + ahci->func));
+    }
+    vga_putchar('\n');
 }
 
 void kernel_main(void)
@@ -55,6 +88,9 @@ void kernel_main(void)
 
     heap_init();
     vga_write("[ ok ] Heap ready (1 MiB)\n");
+
+    pci_init();
+    report_pci();
 
     fish_init();
     if (ata_init()) {

@@ -123,6 +123,29 @@ void  kfree(void *pointer);
 void  heap_stats(size_t *used_out, size_t *free_out, size_t *blocks_out);
 
 
+/* --- PCI --- */
+
+/* Every device Seaweed found on the PCI bus at boot. */
+#define PCI_MAX_DEVICES 64
+
+struct pci_device {
+    uint8_t  bus, slot, func;      /* written as bus:slot.func, e.g. 00:1f.2 */
+    uint16_t vendor, device;       /* who made it, and which chip it is */
+    uint8_t  class_code, subclass, prog_if, revision;
+    uint8_t  header_type;          /* 0 = device, 1 = PCI-to-PCI bridge */
+    uint32_t bar[6];               /* Base Address Registers, as read */
+};
+
+int pci_count(void);               /* how many are listed */
+int pci_found(void);               /* how many answered; more if the list filled */
+const struct pci_device *pci_get(int index);   /* NULL past the end */
+
+/* Human-readable names, such as "SATA controller (AHCI)" and "Intel".
+ * The vendor name is "" when it is not one Seaweed knows. */
+const char *pci_class_name(const struct pci_device *device);
+const char *pci_vendor_name(uint16_t vendor);
+
+
 /* --- disk --- */
 
 /* 1 if a disk was found on the primary IDE channel at boot, 0 if not.

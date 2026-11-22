@@ -615,6 +615,132 @@ static int cmd_partition(const char *arg)
     return 0;
 }
 
+/* ---- PCI ---- */
+
+static void write_hex_digits(uint32_t value, int digits)
+{
+    static const char hex[] = "0123456789abcdef";
+
+    for (int i = digits - 1; i >= 0; i--) vga_putchar(hex[(value >> (i * 4)) & 0xF]);
+}
+
+static void write_pci_address(const struct pci_device *d)
+{
+    write_hex_digits(d->bus, 2);
+    vga_putchar(':');
+    write_hex_digits(d->slot, 2);
+    vga_putchar('.');
+    write_hex_digits(d->func, 1);
+}
+
+/* A BAR says where a device's own registers are. Bit 0 tells I/O ports
+ * from memory; for memory, bits 1-2 say whether it is a 64-bit address
+ * whose top half is in the next BAR. Returns how many BARs it used. */
+static int write_bar(const struct pci_device *d, int i)
+{
+    uint32_t bar = d->bar[i];
+
+    vga_write("  BAR");
+    write_number((uint32_t)i);
+    vga_write(": ");
+
+    if (bar & 0x1) {
+        vga_write("I/O ports at 0x");
+        write_hex_digits(bar & ~0x3u, 4);
+        vga_putchar('\n');
+        return 1;
+    }
+
+    vga_write("memory at 0x");
+    if (((bar >> 1) & 0x3) == 0x2 && i < 5) {
+        if (d->bar[i + 1] != 0) write_hex_digits(d->bar[i + 1], 8);
+        write_hex_digits(bar & ~0xFu, 8);
+        vga_write(" (64-bit");
+        vga_write((bar & 0x8) ? ", prefetchable)\n" : ")\n");
+        return 2;
+    }
+    write_hex_digits(bar & ~0xFu, 8);
+    vga_write((bar & 0x8) ? " (prefetchable)\n" : "\n");
+    return 1;
+}
+
+/* pci        - one line per device
+ * pci <n>    - everything about device n from that list */
+static int cmd_pci(const char *arg)
+{
+    int count = pci_count();
+    uint32_t which;
+    const struct pci_device *d;
+
+    if (arg[0] == '\0') {
+        if (count == 0) { vga_write("No PCI devices found.\n"); return 1; }
+
+        for (int i = 0; i < count; i++) {
+            const char *vendor;
+
+            d = pci_get(i);
+            vendor = pci_vendor_name(d->vendor);
+
+            if (i + 1 < 10) vga_putchar(' ');
+            write_number((uint32_t)i + 1);
+            vga_write("  ");
+            write_pci_address(d);
+            vga_write("  ");
+            write_hex_digits(d->vendor, 4);
+            vga_putchar(':');
+            write_hex_digits(d->device, 4);
+            vga_write("  ");
+            vga_write(pci_class_name(d));
+            if (vendor[0] != '\0') { vga_write(", "); vga_write(vendor); }
+            vga_putchar('\n');
+        }
+        if (pci_found() > count) {
+            vga_write("(and more: only the first ");
+            write_number((uint32_t)count);
+            vga_write(" are kept)\n");
+        }
+        return 0;
+    }
+
+    if (!parse_number(arg, &which) || which == 0 || which > (uint32_t)count) {
+        vga_write("Usage: pci [number from the list]\n");
+        return 1;
+    }
+
+    d = pci_get((int)which - 1);
+    write_pci_address(d);
+    vga_write("  ");
+    vga_write(pci_class_name(d));
+    vga_putchar('\n');
+
+    vga_write("  Vendor 0x");
+    write_hex_digits(d->vendor, 4);
+    if (pci_vendor_name(d->vendor)[0] != '\0') {
+        vga_write(" (");
+        vga_write(pci_vendor_name(d->vendor));
+        vga_putchar(')');
+    }
+    vga_write(", device 0x");
+    write_hex_digits(d->device, 4);
+    vga_write(", revision ");
+    write_number(d->revision);
+    vga_putchar('\n');
+
+    vga_write("  Class ");
+    write_hex_digits(d->class_code, 2);
+    vga_putchar(':');
+    write_hex_digits(d->subclass, 2);
+    vga_putchar(':');
+    write_hex_digits(d->prog_if, 2);
+    vga_write(d->header_type == 1 ? ", PCI-to-PCI bridge\n" : "\n");
+
+    for (int i = 0; i < 6; ) {
+        if (d->bar[i] == 0) { i++; continue; }
+        i += write_bar(d, i);
+    }
+    return 0;
+}
+
 static int cmd_color(const char *arg)
 {
     int value = 0;
@@ -695,6 +821,7 @@ static const struct command commands[] = {
     { "format",   "yes",            "erase the filesystem and save it",  cmd_format   },
     { "disk",     "",               "is there a disk attached?",         cmd_disk     },
     { "partition", "[new <n>]",     "partitions, free space, new Fish",  cmd_partition },
+    { "pci",      "[n]",            "list PCI devices, or show one",     cmd_pci      },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },
     { "whoami",   "",               "print the current user name",       cmd_whoami   },
     { "user",     "<name>",         "change the user name",              cmd_user     },
