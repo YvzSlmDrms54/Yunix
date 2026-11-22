@@ -60,6 +60,7 @@
 #define PORT_TFD       (0x20 / 4)     /* the device's status and error */
 #define PORT_SIG       (0x24 / 4)     /* what kind of device this is */
 #define PORT_SSTS      (0x28 / 4)     /* link status */
+#define PORT_SCTL      (0x2C / 4)     /* link control: used for COMRESET */
 #define PORT_SERR      (0x30 / 4)
 #define PORT_CI        (0x38 / 4)     /* command issue: one bit per slot */
 
@@ -88,6 +89,12 @@
 
 #define ATA_IDENTIFY         0xEC
 #define ATA_IDENTIFY_PACKET  0xA1
+#define ATA_READ_DMA         0xC8   /* 28-bit */
+#define ATA_WRITE_DMA        0xCA
+#define ATA_FLUSH            0xE7
+#define ATA_READ_DMA_EXT     0x25   /* 48-bit */
+#define ATA_WRITE_DMA_EXT    0x35
+#define ATA_FLUSH_EXT        0xEA
 
 #define MAX_PORTS      32
 
@@ -181,52 +188,116 @@ static int port_start(int port)
 
 /* --- one command --- */
 
-/* Sends a command that reads one 512-byte block into 'buffer', using
- * command slot 0, and waits for it. Returns 0 on success. */
-static int issue_read_command(int port, uint8_t command, void *buffer)
+/* After an error or a timeout the port's command engine stops, and the
+ * spec's way back is to stop the port, clear its error bits and start it
+ * again. If the device itself is wedged (still busy), a COMRESET - a
+ * reset sent down the SATA link - comes first. */
+static void port_recover(int port)
+{
+    volatile uint32_t *p = port_regs(port);
+
+    port_stop(p);
+
+    if (p[PORT_TFD] & (TFD_BSY | TFD_DRQ)) {
+        p[PORT_SCTL] = (p[PORT_SCTL] & ~0xFu) | 0x1;      /* DET = 1: reset */
+        timer_sleep(10);                                  /* spec: at least 1 ms */
+        p[PORT_SCTL] &= ~0xFu;                            /* DET = 0: let go */
+        wait_for(&p[PORT_SSTS], SSTS_DET_MASK, SSTS_DET_UP, 1000);
+    }
+
+    p[PORT_SERR] = 0xFFFFFFFFu;
+    p[PORT_IS]   = 0xFFFFFFFFu;
+    port_start(port);
+}
+
+/* Sends one command through slot 0 and waits for it to finish.
+ *
+ *   fis        the 20-byte command FIS
+ *   writing    1 if data goes from memory to the device
+ *   buffer     where the data goes or comes from (NULL with bytes = 0)
+ *   bytes      how much; at most 4 MiB, which is what one PRD entry holds
+ *
+ * Returns AHCI_OK, AHCI_ERR_DEVICE if the device reported an error, or
+ * AHCI_ERR_TIMEOUT. After either error the port is recovered, so the
+ * next command has a fair chance. */
+static int issue(int port, const uint8_t *fis, int writing,
+                 void *buffer, uint32_t bytes, uint32_t timeout_ms)
 {
     volatile uint32_t *p = port_regs(port);
     struct port_memory *m = &memory[port];
     uint32_t *header = (uint32_t *)m->command_list;
-    uint8_t  *fis = m->command_table;
     uint32_t *prd = (uint32_t *)(m->command_table + 0x80);
+    uint32_t deadline;
+    int result = AHCI_OK;
 
-    if (wait_for(&p[PORT_TFD], TFD_BSY | TFD_DRQ, 0, 1000) != 0) return -1;
+    if (wait_for(&p[PORT_TFD], TFD_BSY | TFD_DRQ, 0, 1000) != 0) {
+        port_recover(port);
+        return AHCI_ERR_TIMEOUT;
+    }
 
-    /* Slot 0's header: the command FIS is 5 dwords long, data flows from
-     * the device (no write bit), and there is one PRD entry. */
-    header[0] = 5u | (1u << 16);
+    /* Slot 0's header: the command FIS is 5 dwords long, the write bit
+     * says which way data flows, and there is one PRD entry - or none,
+     * for a command that moves no data. */
+    header[0] = 5u | (writing ? (1u << 6) : 0) | ((bytes > 0 ? 1u : 0u) << 16);
     header[1] = 0;                              /* bytes moved, filled in by the HBA */
     header[2] = (uint32_t)m->command_table;
     header[3] = 0;
 
     memset(m->command_table, 0, sizeof(m->command_table));
-    fis[0] = FIS_REG_H2D;
-    fis[1] = 0x80;                              /* this FIS carries a command */
-    fis[2] = command;
-    fis[7] = 0;                                 /* device register */
+    memcpy(m->command_table, fis, 20);
 
-    /* One region: 512 bytes into 'buffer'. The count field holds the
-     * length minus one. */
-    prd[0] = (uint32_t)buffer;
-    prd[1] = 0;
-    prd[2] = 0;
-    prd[3] = 512 - 1;
+    if (bytes > 0) {
+        /* One region of memory. The count field holds the length minus
+         * one, and the address must be even. */
+        prd[0] = (uint32_t)buffer;
+        prd[1] = 0;
+        prd[2] = 0;
+        prd[3] = bytes - 1;
+    }
 
     p[PORT_IS] = 0xFFFFFFFFu;
     p[PORT_CI] = 1;
 
-    {
-        uint32_t deadline = timer_ticks() + TIMER_HZ * 2;      /* two seconds */
-
-        while (p[PORT_CI] & 1) {
-            if (p[PORT_IS] & IS_TFES) return -1;
-            if ((int32_t)(timer_ticks() - deadline) > 0) return -1;
-        }
+    deadline = timer_ticks() + timeout_ms / (1000 / TIMER_HZ) + 1;
+    while (p[PORT_CI] & 1) {
+        if (p[PORT_IS] & IS_TFES)                     { result = AHCI_ERR_DEVICE;  break; }
+        if ((int32_t)(timer_ticks() - deadline) > 0)  { result = AHCI_ERR_TIMEOUT; break; }
     }
 
-    if (p[PORT_TFD] & TFD_ERR) return -1;
-    return 0;
+    if (result == AHCI_OK && (p[PORT_TFD] & TFD_ERR)) result = AHCI_ERR_DEVICE;
+    if (result != AHCI_OK) port_recover(port);
+    return result;
+}
+
+/* A command FIS for the older commands: IDENTIFY, and 28-bit reads,
+ * writes and flushes. */
+static void make_fis(uint8_t *fis, uint8_t command)
+{
+    memset(fis, 0, 20);
+    fis[0] = FIS_REG_H2D;
+    fis[1] = 0x80;                              /* this FIS carries a command */
+    fis[2] = command;
+}
+
+/* Fills in the address and count. With 48-bit addressing the address
+ * is six bytes and the count two; the 28-bit commands keep the top four
+ * address bits in the device register. Bit 6 of that register selects
+ * LBA addressing, as opposed to the ancient cylinder/head/sector kind. */
+static void set_lba(uint8_t *fis, uint64_t lba, uint16_t count, int lba48)
+{
+    fis[4]  = (uint8_t)lba;
+    fis[5]  = (uint8_t)(lba >> 8);
+    fis[6]  = (uint8_t)(lba >> 16);
+    fis[7]  = 0x40;
+    if (lba48) {
+        fis[8]  = (uint8_t)(lba >> 24);
+        fis[9]  = (uint8_t)(lba >> 32);
+        fis[10] = (uint8_t)(lba >> 40);
+    } else {
+        fis[7] |= (uint8_t)((lba >> 24) & 0x0F);
+    }
+    fis[12] = (uint8_t)count;
+    fis[13] = (uint8_t)(count >> 8);
 }
 
 /* --- making sense of IDENTIFY --- */
@@ -266,7 +337,12 @@ static void add_device(int port, enum ahci_kind kind)
     if (port_start(port) != 0) return;
 
     memset(identify_buffer, 0, sizeof(identify_buffer));
-    if (issue_read_command(port, command, identify_buffer) != 0) return;
+    {
+        uint8_t fis[20];
+
+        make_fis(fis, command);
+        if (issue(port, fis, 0, identify_buffer, 512, 2000) != AHCI_OK) return;
+    }
 
     d->identified = 1;
     read_model(id, d->model);
@@ -353,4 +429,102 @@ const struct ahci_device *ahci_get(int index)
 {
     if (index < 0 || index >= device_count) return 0;
     return &devices[index];
+}
+
+/* --- reading and writing ---
+ *
+ * Big transfers are split into commands of at most CHUNK_SECTORS. One
+ * PRD entry could describe up to 4 MiB, but 64 KiB keeps each command
+ * well inside the timeout on slow disks and inside what the 28-bit
+ * commands can count. */
+
+#define CHUNK_SECTORS   128
+#define SECTOR_BYTES    512
+#define RW_TIMEOUT_MS   5000
+#define FLUSH_TIMEOUT_MS 30000      /* a real disk may take a while */
+
+/* Only identity-mapped RAM can be handed to the controller: there,
+ * the address the kernel uses is the physical address the device needs.
+ * Device memory and anything past the map would be nonsense to it. */
+#define DMA_LIMIT       (16u * 1024 * 1024)
+
+static int check_request(int index, uint64_t lba, uint32_t count, const void *buffer,
+                         const struct ahci_device **out)
+{
+    const struct ahci_device *d = ahci_get(index);
+    uint32_t address = (uint32_t)buffer;
+    uint64_t limit;
+
+    if (d == 0 || d->kind != AHCI_DISK || !d->identified) return AHCI_ERR_NODEV;
+    if (count == 0) return AHCI_OK;
+
+    /* The device's own size, and for 28-bit disks the command's reach. */
+    limit = d->sectors;
+    if (!d->lba48 && limit > 0x10000000u) limit = 0x10000000u;
+    if (lba >= limit || count > limit - lba) return AHCI_ERR_RANGE;
+
+    if (address == 0 || (address & 1)) return AHCI_ERR_BUFFER;
+    if (count > (DMA_LIMIT - address) / SECTOR_BYTES || address >= DMA_LIMIT) return AHCI_ERR_BUFFER;
+
+    *out = d;
+    return AHCI_OK;
+}
+
+static int transfer(int index, uint64_t lba, uint32_t count, uint8_t *buffer, int writing)
+{
+    const struct ahci_device *d;
+    int result = check_request(index, lba, count, buffer, &d);
+
+    if (result != AHCI_OK || count == 0) return result;
+
+    while (count > 0) {
+        uint32_t chunk = count < CHUNK_SECTORS ? count : CHUNK_SECTORS;
+        uint8_t fis[20];
+
+        if (d->lba48) make_fis(fis, writing ? ATA_WRITE_DMA_EXT : ATA_READ_DMA_EXT);
+        else          make_fis(fis, writing ? ATA_WRITE_DMA     : ATA_READ_DMA);
+        set_lba(fis, lba, (uint16_t)chunk, d->lba48);
+
+        result = issue(d->port, fis, writing, buffer, chunk * SECTOR_BYTES, RW_TIMEOUT_MS);
+        if (result != AHCI_OK) return result;
+
+        lba += chunk;
+        count -= chunk;
+        buffer += chunk * SECTOR_BYTES;
+    }
+
+    if (writing) {
+        /* The disk may still hold the data in its own cache. Same reason
+         * as the IDE driver: ask it to commit before saying we are done. */
+        uint8_t fis[20];
+
+        make_fis(fis, d->lba48 ? ATA_FLUSH_EXT : ATA_FLUSH);
+        result = issue(d->port, fis, 0, 0, 0, FLUSH_TIMEOUT_MS);
+    }
+    return result;
+}
+
+int ahci_read(int index, uint64_t lba, uint32_t count, void *buffer)
+{
+    return transfer(index, lba, count, (uint8_t *)buffer, 0);
+}
+
+int ahci_write(int index, uint64_t lba, uint32_t count, const void *buffer)
+{
+    /* The controller only reads from the buffer on a write; the cast
+     * just lets both directions share one path. */
+    return transfer(index, lba, count, (uint8_t *)(uintptr_t)buffer, 1);
+}
+
+const char *ahci_error(int code)
+{
+    switch (code) {
+    case AHCI_OK:          return "ok";
+    case AHCI_ERR_NODEV:   return "no such SATA disk";
+    case AHCI_ERR_RANGE:   return "past the end of the disk";
+    case AHCI_ERR_BUFFER:  return "buffer cannot be used for DMA";
+    case AHCI_ERR_DEVICE:  return "the disk reported an error";
+    case AHCI_ERR_TIMEOUT: return "the disk did not answer in time";
+    default:               return "unknown error";
+    }
 }
