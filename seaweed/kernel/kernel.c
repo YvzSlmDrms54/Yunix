@@ -14,6 +14,18 @@
 #include "timer.h"
 #include "ata.h"
 #include "heap.h"
+#include "partition.h"
+#include "string.h"
+
+/* Prints a sector count as whole MiB (2048 sectors of 512 bytes each). */
+static void write_mib(uint32_t sectors)
+{
+    char buffer[12];
+
+    utoa(sectors / 2048, buffer, 10);
+    vga_write(buffer);
+    vga_write(" MiB");
+}
 
 void kernel_main(void)
 {
@@ -47,13 +59,31 @@ void kernel_main(void)
     fish_init();
     if (ata_init()) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-        vga_write("[ ok ] ATA disk found on the primary channel\n");
+        vga_write("[ ok ] ATA disk found on the primary channel (");
+        write_mib(ata_sectors());
+        vga_write(")\n");
 
-        if (fish_load() == FISH_OK) {
-            vga_write("[ ok ] Fish filesystem restored from disk\n");
-        } else {
+        switch (partition_scan()) {
+        case DISK_FISH:
+            vga_write("[ ok ] Fish partition found\n");
+            if (fish_load() == FISH_OK) {
+                vga_write("[ ok ] Fish filesystem restored from disk\n");
+            } else {
+                vga_set_color(VGA_YELLOW, VGA_BLACK);
+                vga_write("[ .. ] Fish partition holds no image yet, starting empty\n");
+            }
+            break;
+
+        case DISK_BLANK:
             vga_set_color(VGA_YELLOW, VGA_BLACK);
-            vga_write("[ .. ] No Fish image on the disk, starting empty\n");
+            vga_write("[ .. ] Disk is blank: no partitions, no Fish yet\n");
+            break;
+
+        default:
+            vga_set_color(VGA_YELLOW, VGA_BLACK);
+            vga_write("[ .. ] Disk holds other data and no Fish partition.\n");
+            vga_write("       Seaweed will not write to it.\n");
+            break;
         }
     } else {
         vga_set_color(VGA_YELLOW, VGA_BLACK);

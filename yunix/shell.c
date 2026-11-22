@@ -361,37 +361,89 @@ static int cmd_load(const char *arg)
     return 0;
 }
 
+/* Prints a sector count as MiB. */
+static void write_mib(uint32_t sectors)
+{
+    char buffer[12];
+
+    utoa(sectors / 2048, buffer, 10);
+    vga_write(buffer);
+    vga_write(" MiB");
+}
+
 static int cmd_format(const char *arg)
 {
+    struct disk_info info;
     int result;
 
+    disk_info(&info);
+
     if (strcmp(arg, "yes") != 0) {
-        vga_write("This erases every file, in memory and on the disk.\n");
+        if (info.layout == DISK_BLANK) {
+            vga_write("The disk is blank. This creates a partition table with\n");
+            vga_write("one Fish partition on it, and erases every file in memory.\n");
+        } else {
+            vga_write("This erases every file, in memory and in the Fish partition.\n");
+        }
         vga_write("Type: format yes\n");
         return 1;
     }
 
-    /* Check before wiping anything. Otherwise, with no disk attached,
-     * fish_init() would erase every file in memory and only then would
-     * the save fail. */
-    if (!ata_present()) { fish_fail("format", FISH_ERR_NODISK); return 1; }
+    /* fish_format checks everything before it wipes anything: on a disk
+     * that belongs to something else it refuses and changes nothing. */
+    result = fish_format();
+    if (result < 0) return fish_fail("format", result);
 
-    fish_init();
-    result = fish_save();
-    if (result < 0) { fish_fail("format", result); return 1; }
+    if (info.layout == DISK_BLANK) {
+        vga_write("Created a partition table with one Fish partition.\n");
+    }
     vga_write("Filesystem erased and written to disk.\n");
-
     return 0;
 }
 
 static int cmd_disk(const char *arg)
 {
+    struct disk_info info;
+    char buffer[12];
+
     (void)arg;
+    disk_info(&info);
 
     /* Fails when there is no disk, so "disk && save" does what it says. */
-    if (ata_present()) { vga_write("Primary master: present\n"); return 0; }
-    vga_write("Primary master: not found\n");
-    return 1;
+    if (info.layout == DISK_NONE) {
+        vga_write("Primary master: not found\n");
+        return 1;
+    }
+
+    vga_write("Primary master: ");
+    write_mib(info.sectors);
+    vga_write("\nPartition table: ");
+    vga_write(info.table);
+    if (info.partitions > 0) {
+        vga_write(", ");
+        utoa((unsigned int)info.partitions, buffer, 10);
+        vga_write(buffer);
+        vga_write(info.partitions == 1 ? " partition" : " partitions");
+    }
+    vga_putchar('\n');
+
+    switch (info.layout) {
+    case DISK_FISH:
+        vga_write("Fish partition: from sector ");
+        utoa(info.fish_start, buffer, 10);
+        vga_write(buffer);
+        vga_write(", ");
+        write_mib(info.fish_sectors);
+        vga_putchar('\n');
+        break;
+    case DISK_BLANK:
+        vga_write("The disk is blank. format yes will make a Fish partition.\n");
+        break;
+    default:
+        vga_write("No Fish partition. Yunix will not write to this disk.\n");
+        break;
+    }
+    return 0;
 }
 
 static int cmd_color(const char *arg)

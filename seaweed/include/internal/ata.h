@@ -12,6 +12,9 @@
  * Returns 1 if one is there, 0 if not. */
 int ata_init(void);
 
+/* How many sectors the disk has, or 0 when there is no disk. */
+uint32_t ata_sectors(void);
+
 /* Both work in whole 512-byte sectors and address them by LBA - a plain
  * sector number counting from zero. Return 0 on success, negative on
  * failure. */

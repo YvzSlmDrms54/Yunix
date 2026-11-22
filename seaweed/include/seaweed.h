@@ -129,6 +129,28 @@ void  heap_stats(size_t *used_out, size_t *free_out, size_t *blocks_out);
  * Reading and writing sectors is the kernel's business; go through Fish. */
 int ata_present(void);
 
+/* What is on the disk, as far as Fish is concerned. Seaweed reads the
+ * partition table (MBR or GPT) at boot and only ever writes inside a
+ * partition marked as Fish's. */
+enum disk_layout {
+    DISK_NONE,       /* no disk attached */
+    DISK_BLANK,      /* nothing on it at all - fish_format() may partition it */
+    DISK_FISH,       /* holds a Fish partition, and Fish lives there */
+    DISK_FOREIGN     /* holds other partitions or data and no Fish partition:
+                        Seaweed will not write to it */
+};
+
+struct disk_info {
+    enum disk_layout layout;
+    uint32_t    sectors;        /* size of the whole disk */
+    const char *table;          /* "MBR", "GPT", "none", ... */
+    int         partitions;     /* how many entries the table lists */
+    uint32_t    fish_start;     /* the Fish partition, if layout is DISK_FISH */
+    uint32_t    fish_sectors;
+};
+
+void disk_info(struct disk_info *out);
+
 
 /* --- Fish, the filesystem ---
  *
@@ -161,6 +183,9 @@ int ata_present(void);
 #define FISH_ERR_IO     -10
 #define FISH_ERR_FORMAT -11
 #define FISH_ERR_NOMEM  -12
+#define FISH_ERR_NOPART -13   /* the disk is blank: no Fish partition yet */
+#define FISH_ERR_FOREIGN -14  /* the disk belongs to something else */
+#define FISH_ERR_SMALL  -15   /* the Fish partition cannot hold the image */
 
 /* Empties the filesystem in memory, leaving only the root. */
 void fish_init(void);
@@ -190,10 +215,15 @@ void fish_restore_cwd(int handle);
 /* Writes the current directory as a path like "/notes/2026". */
 void fish_path(char *buffer, size_t size);
 
-/* Writes the whole filesystem to disk, or reads it back. Both need a
- * disk on the primary IDE channel; without one they fail cleanly. */
+/* Writes the whole filesystem to its partition, or reads it back. Both
+ * need a disk with a Fish partition; without one they fail cleanly. */
 int  fish_save(void);
 int  fish_load(void);
+
+/* Erases the filesystem, in memory and on the disk. On a blank disk it
+ * first creates a partition table with one Fish partition. On a disk that
+ * holds anything else it refuses (FISH_ERR_FOREIGN) and changes nothing. */
+int  fish_format(void);
 
 /* Turns an error code into something a human can read. */
 const char *fish_error(int code);

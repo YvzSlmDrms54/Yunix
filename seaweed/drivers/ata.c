@@ -34,7 +34,8 @@
 #define CMD_FLUSH       0xE7
 #define CMD_IDENTIFY    0xEC
 
-static int present;
+static int      present;
+static uint32_t sectors;      /* disk size, from IDENTIFY */
 
 int ata_present(void) { return present; }
 
@@ -89,6 +90,7 @@ int ata_init(void)
     uint8_t status;
 
     present = 0;
+    sectors = 0;
 
     outb(ATA_DRIVE, 0xA0);           /* select the master drive */
     delay_400ns();
@@ -107,13 +109,21 @@ int ata_init(void)
     if (inb(ATA_STATUS) == 0) return 0;               /* no drive */
     if (wait_ready() != 0) return 0;
 
-    /* IDENTIFY returns one sector of information about the drive. We do
-     * not use it yet, but it has to be read or the drive stays stuck. */
-    for (int i = 0; i < 256; i++) (void)inw(ATA_DATA);
+    /* IDENTIFY returns one sector of information about the drive, and it
+     * has to be read in full or the drive stays stuck. Words 60 and 61
+     * hold how many sectors 28-bit LBA can reach - the size of the disk,
+     * as far as this driver is concerned. */
+    for (int i = 0; i < 256; i++) {
+        uint16_t word = inw(ATA_DATA);
+        if (i == 60) sectors = word;
+        if (i == 61) sectors |= (uint32_t)word << 16;
+    }
 
     present = 1;
     return 1;
 }
+
+uint32_t ata_sectors(void) { return present ? sectors : 0; }
 
 int ata_read(uint32_t lba, uint8_t count, void *buffer)
 {

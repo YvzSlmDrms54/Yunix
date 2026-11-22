@@ -10,6 +10,7 @@
 #include "seaweed.h"
 #include "string.h"
 #include "ata.h"
+#include "partition.h"
 #include "heap.h"
 #include <stdint.h>
 
@@ -291,12 +292,27 @@ struct superblock {
 /* How many whole sectors the node array needs. */
 #define NODE_BYTES   (sizeof(nodes))
 #define NODE_SECTORS ((NODE_BYTES + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE)
-/* Where our image starts on the disk.
- *
- * Not sector 0: that is the MBR, which holds the partition table and the
- * first stage of the machine's boot loader. Overwriting it on a real
- * computer would stop the installed system from starting. */
-#define FISH_START_LBA 2048
+/* The image is the superblock in sector 0 of the Fish partition, then
+ * the nodes. Sector numbers here count from the start of the partition;
+ * partition.c turns them into disk sectors and refuses anything outside
+ * it, so Fish cannot touch another system's data even by mistake. */
+#define IMAGE_SECTORS (1 + NODE_SECTORS)
+
+/* Can we read and write an image right now? */
+static int disk_ready(void)
+{
+    struct disk_info info;
+
+    disk_info(&info);
+    switch (info.layout) {
+    case DISK_NONE:    return FISH_ERR_NODISK;
+    case DISK_BLANK:   return FISH_ERR_NOPART;
+    case DISK_FOREIGN: return FISH_ERR_FOREIGN;
+    case DISK_FISH:    break;
+    }
+    if (partition_size() < IMAGE_SECTORS) return FISH_ERR_SMALL;
+    return FISH_OK;
+}
 
 int fish_save(void)
 {
@@ -304,8 +320,9 @@ int fish_save(void)
     struct superblock sb;
     const char *source = (const char *)nodes;
     uint32_t written = 0;
+    int ready = disk_ready();
 
-    if (!ata_present()) return FISH_ERR_NODISK;
+    if (ready != FISH_OK) return ready;
 
     sb.magic      = FISH_MAGIC;
     sb.version    = FISH_VERSION;
@@ -318,7 +335,7 @@ int fish_save(void)
      * cleanly - instead of a valid-looking header in front of half-written
      * nodes, which it would happily believe. */
     memset(sector, 0, sizeof(sector));
-    if (ata_write(FISH_START_LBA, 1, sector) != 0) return FISH_ERR_IO;
+    if (partition_write(0, sector) != 0) return FISH_ERR_IO;
 
     /* Copy through a 512-byte buffer so the last, partly filled sector
      * is padded with zeros rather than with whatever follows in memory. */
@@ -330,14 +347,14 @@ int fish_save(void)
         memset(sector, 0, sizeof(sector));
         memcpy(sector, source + written, chunk);
 
-        if (ata_write(FISH_START_LBA + 1 + s, 1, sector) != 0) return FISH_ERR_IO;
+        if (partition_write(1 + s, sector) != 0) return FISH_ERR_IO;
         written += chunk;
     }
 
     /* Every node is on the disk. Only now does the image become valid. */
     memset(sector, 0, sizeof(sector));
     memcpy(sector, &sb, sizeof(sb));
-    if (ata_write(FISH_START_LBA, 1, sector) != 0) return FISH_ERR_IO;
+    if (partition_write(0, sector) != 0) return FISH_ERR_IO;
 
     return FISH_OK;
 }
@@ -391,9 +408,11 @@ int fish_load(void)
     char *dest;
     uint32_t read_so_far = 0;
 
-    if (!ata_present()) return FISH_ERR_NODISK;
+    int ready = disk_ready();
 
-    if (ata_read(FISH_START_LBA, 1, sector) != 0) return FISH_ERR_IO;
+    if (ready != FISH_OK) return ready;
+
+    if (partition_read(0, sector) != 0) return FISH_ERR_IO;
     memcpy(&sb, sector, sizeof(sb));
 
     /* Refuse anything we do not recognise. Loading a mismatched image
@@ -415,7 +434,7 @@ int fish_load(void)
         uint32_t chunk = remaining < ATA_SECTOR_SIZE ? remaining
                                                      : ATA_SECTOR_SIZE;
 
-        if (ata_read(FISH_START_LBA + 1 + s, 1, sector) != 0) {
+        if (partition_read(1 + s, sector) != 0) {
             kfree(image);
             return FISH_ERR_IO;
         }
@@ -445,6 +464,27 @@ int fish_load(void)
     return FISH_OK;
 }
 
+int fish_format(void)
+{
+    struct disk_info info;
+
+    disk_info(&info);
+
+    /* Every check comes before fish_init(): if formatting cannot go
+     * ahead, the files in memory must still be there afterwards. */
+    if (info.layout == DISK_NONE)    return FISH_ERR_NODISK;
+    if (info.layout == DISK_FOREIGN) return FISH_ERR_FOREIGN;
+
+    if (info.layout == DISK_BLANK && partition_create_fish() != 0) {
+        return FISH_ERR_IO;
+    }
+
+    if (partition_size() < IMAGE_SECTORS) return FISH_ERR_SMALL;
+
+    fish_init();
+    return fish_save();
+}
+
 const char *fish_error(int code)
 {
     switch (code) {
@@ -461,6 +501,9 @@ const char *fish_error(int code)
     case FISH_ERR_IO:        return "disk error";
     case FISH_ERR_FORMAT:    return "disk holds no valid Fish image";
     case FISH_ERR_NOMEM:     return "out of memory";
+    case FISH_ERR_NOPART:    return "the disk has no Fish partition yet";
+    case FISH_ERR_FOREIGN:   return "the disk holds other data; Yunix will not write to it";
+    case FISH_ERR_SMALL:     return "the Fish partition is too small";
     default:                 return "unknown error";
     }
 }
