@@ -401,72 +401,94 @@ static int cmd_format(const char *arg)
     return 0;
 }
 
-/* Lists what is on the SATA controller, if there is one. Fish cannot use
- * these disks yet - that needs the AHCI read and write commands. */
-static void list_sata(void)
+static int parse_number(const char *text, uint32_t *out);
+
+/* "IDE primary master, 16 MiB" or "SATA port 0, QEMU HARDDISK, 32 MiB". */
+static void write_disk(const struct block_info *b)
 {
     char buffer[12];
 
-    if (!ahci_present()) return;
+    if (b->kind == BLOCK_IDE) {
+        vga_write("IDE primary master");
+    } else {
+        vga_write("SATA port ");
+        utoa((unsigned int)b->port, buffer, 10);
+        vga_write(buffer);
+        vga_write(", ");
+        vga_write(b->model);
+    }
+    vga_write(", ");
+    /* Shifting, not dividing: 64-bit division would need a helper
+     * library we do not have. */
+    utoa((unsigned int)(b->sectors >> 11), buffer, 10);
+    vga_write(buffer);
+    vga_write(" MiB");
+}
 
-    vga_write("SATA (AHCI):");
-    if (ahci_count() == 0) vga_write(" nothing plugged in");
-    vga_putchar('\n');
+static const char *layout_name(int layout)
+{
+    switch (layout) {
+    case DISK_FISH:  return "Fish partition";
+    case DISK_BLANK: return "blank";
+    default:         return "other data, no Fish";
+    }
+}
+
+/* One line per disk, with what is on it. Looking at each disk means
+ * selecting it for a moment; the disk Fish uses is selected again after. */
+static void list_disks(void)
+{
+    int in_use = block_current();
+    char buffer[12];
+
+    vga_write("Disks:\n");
+    for (int i = 0; i < block_count(); i++) {
+        struct block_info b;
+        struct disk_info info;
+        int layout;
+
+        block_get(i, &b);
+        layout = disk_select(i);
+        disk_info(&info);
+
+        vga_write(i == in_use ? "* " : "  ");
+        utoa((unsigned int)i + 1, buffer, 10);
+        vga_write(buffer);
+        vga_write(". ");
+        write_disk(&b);
+        vga_write(": ");
+        if (layout != DISK_BLANK) { vga_write(info.table); vga_write(", "); }
+        vga_write(layout_name(layout));
+        vga_putchar('\n');
+    }
+    if (in_use >= 0) disk_select(in_use);
 
     for (int i = 0; i < ahci_count(); i++) {
         const struct ahci_device *d = ahci_get(i);
 
-        vga_write("  port ");
+        if (d->kind != AHCI_ATAPI) continue;
+        vga_write("CD/DVD: SATA port ");
         utoa((unsigned int)d->port, buffer, 10);
         vga_write(buffer);
-        vga_write(": ");
-
-        switch (d->kind) {
-        case AHCI_DISK:  vga_write("disk"); break;
-        case AHCI_ATAPI: vga_write("CD/DVD drive"); break;
-        default:         vga_write("other device"); break;
-        }
-
-        if (!d->identified) {
-            if (d->kind != AHCI_OTHER) vga_write(", did not answer IDENTIFY");
-            vga_putchar('\n');
-            continue;
-        }
-
         if (d->model[0] != '\0') { vga_write(", "); vga_write(d->model); }
-        if (d->kind == AHCI_DISK) {
-            vga_write(", ");
-            /* Shifting, not dividing: 64-bit division would need a
-             * helper library we do not have. */
-            utoa((unsigned int)(d->sectors >> 11), buffer, 10);
-            vga_write(buffer);
-            vga_write(" MiB");
-            if (!d->lba48) vga_write(", 28-bit only");
-        }
         vga_putchar('\n');
     }
 }
 
-static int cmd_disk(const char *arg)
+/* The disk Fish is on, in detail. */
+static void describe_fish_disk(void)
 {
     struct disk_info info;
     char buffer[12];
 
-    (void)arg;
     disk_info(&info);
 
-    list_sata();
-
-    /* Fails when there is no disk for Fish, so "disk && save" does what
-     * it says. */
-    if (info.layout == DISK_NONE) {
-        vga_write("IDE primary master: not found\n");
-        return 1;
-    }
-
-    vga_write("IDE primary master (used by Fish): ");
+    vga_write("Fish is on disk ");
+    utoa((unsigned int)block_current() + 1, buffer, 10);
+    vga_write(buffer);
+    vga_write(" (");
     write_mib(info.sectors);
-    vga_write("\nPartition table: ");
+    vga_write(" usable). Partition table: ");
     vga_write(info.table);
     if (info.partitions > 0) {
         vga_write(", ");
@@ -492,6 +514,81 @@ static int cmd_disk(const char *arg)
         vga_write("No Fish partition. Yunix will not write to this disk.\n");
         vga_write("Type partition to look for free space for one.\n");
         break;
+    }
+}
+
+/* disk              - list the disks and show the one Fish uses
+ * disk <n> [yes]    - move Fish to disk n, loading its files */
+static int cmd_disk(const char *arg)
+{
+    char number[12];
+    size_t i = 0, n = 0;
+    uint32_t which;
+    int confirmed, layout, result;
+
+    /* Fails when there is no disk for Fish, so "disk && save" does what
+     * it says. */
+    if (block_count() == 0) {
+        vga_write("No disks found.\n");
+        list_disks();
+        return 1;
+    }
+
+    if (arg[0] == '\0') {
+        list_disks();
+        describe_fish_disk();
+        if (block_count() > 1) vga_write("Type disk <number> to move Fish to another disk.\n");
+        return 0;
+    }
+
+    while (arg[i] != '\0' && arg[i] != ' ' && n < sizeof(number) - 1) number[n++] = arg[i++];
+    number[n] = '\0';
+    while (arg[i] == ' ') i++;
+    confirmed = strcmp(arg + i, "yes") == 0;
+
+    if (!parse_number(number, &which) || which == 0 || which > (uint32_t)block_count() ||
+        (arg[i] != '\0' && !confirmed)) {
+        vga_write("Usage: disk [number [yes]]\n");
+        return 1;
+    }
+
+    if ((int)which - 1 == block_current()) {
+        vga_write("Fish is already on that disk.\n");
+        return 0;
+    }
+
+    /* Moving loads the other disk's files in place of these ones. If
+     * these have changes the disk does not have, they would be gone. */
+    if (fish_unsaved() && !confirmed) {
+        vga_write("The files in memory have changes that are not saved.\n");
+        vga_write("Type save first, or: disk ");
+        vga_write(number);
+        vga_write(" yes   to drop them.\n");
+        return 1;
+    }
+
+    layout = disk_select((int)which - 1);
+    fish_init();
+    user_init();
+
+    if (layout == DISK_FISH) {
+        result = fish_load();
+        if (result == FISH_OK) {
+            user_load();
+            vga_write("Fish moved to disk ");
+            vga_write(number);
+            vga_write(", files loaded from it.\n");
+        } else {
+            vga_write("Fish moved to disk ");
+            vga_write(number);
+            vga_write(". Its Fish partition holds no image yet: starting empty.\n");
+        }
+    } else {
+        vga_write("Fish moved to disk ");
+        vga_write(number);
+        vga_write(" (");
+        vga_write(layout_name(layout));
+        vga_write("), starting empty.\n");
     }
     return 0;
 }
@@ -588,7 +685,7 @@ static int cmd_partition(const char *arg)
     int confirmed = 0, free_count, result;
     size_t i = 0;
 
-    if (!ata_present()) { vga_write("partition: no disk found\n"); return 1; }
+    if (block_current() < 0) { vga_write("partition: no disk found\n"); return 1; }
 
     /* Split the argument into words. */
     while (arg[i] != '\0') {
@@ -868,7 +965,7 @@ static const struct command commands[] = {
     { "save",     "",               "write the filesystem to disk",      cmd_save     },
     { "load",     "",               "read the filesystem from disk",     cmd_load     },
     { "format",   "yes",            "erase the filesystem and save it",  cmd_format   },
-    { "disk",     "",               "is there a disk attached?",         cmd_disk     },
+    { "disk",     "[n [yes]]",      "list disks, or move Fish to disk n", cmd_disk    },
     { "partition", "[new <n>]",     "partitions, free space, new Fish",  cmd_partition },
     { "pci",      "[n]",            "list PCI devices, or show one",     cmd_pci      },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },

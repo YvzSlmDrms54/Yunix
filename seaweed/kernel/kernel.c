@@ -17,6 +17,7 @@
 #include "partition.h"
 #include "pci.h"
 #include "ahci.h"
+#include "block.h"
 #include "string.h"
 
 /* Prints a sector count as whole MiB (2048 sectors of 512 bytes each). */
@@ -107,6 +108,36 @@ static void report_ahci(int found)
     vga_putchar('\n');
 }
 
+/* Which disk Fish should live on: the first one that already has a
+ * Fish partition, so a machine with Yunix installed finds its files no
+ * matter which port the disk is on. Without one, the first disk - where
+ * format yes or partition new can make one. */
+static int choose_disk(void)
+{
+    for (int i = 0; i < block_count(); i++) {
+        if (disk_select(i) == DISK_FISH) return i;
+    }
+    return 0;
+}
+
+static void write_disk_name(int index)
+{
+    struct block_info info;
+    char buffer[12];
+
+    if (block_get(index, &info) != 0) return;
+
+    if (info.kind == BLOCK_IDE) {
+        vga_write("IDE primary master");
+    } else {
+        vga_write("SATA port ");
+        utoa((unsigned int)info.port, buffer, 10);
+        vga_write(buffer);
+        vga_write(", ");
+        vga_write(info.model);
+    }
+}
+
 void kernel_main(void)
 {
     vga_init();
@@ -142,12 +173,22 @@ void kernel_main(void)
 
     fish_init();
     if (ata_init()) {
-        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-        vga_write("[ ok ] ATA disk found on the primary channel (");
+        vga_write("[ ok ] IDE disk on the primary channel (");
         write_mib(ata_sectors());
         vga_write(")\n");
+    }
 
-        switch (partition_scan()) {
+    block_init();
+    if (block_count() > 0) {
+        int chosen = choose_disk();
+
+        vga_write("[ ok ] Fish uses disk ");
+        vga_putchar((char)('1' + chosen));
+        vga_write(": ");
+        write_disk_name(chosen);
+        vga_putchar('\n');
+
+        switch ((enum disk_layout)disk_select(chosen)) {
         case DISK_FISH:
             vga_write("[ ok ] Fish partition found\n");
             if (fish_load() == FISH_OK) {
@@ -171,7 +212,7 @@ void kernel_main(void)
         }
     } else {
         vga_set_color(VGA_YELLOW, VGA_BLACK);
-        vga_write("[ .. ] No IDE disk for Fish. Files will vanish on reboot.\n");
+        vga_write("[ .. ] No disk for Fish. Files will vanish on reboot.\n");
     }
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 

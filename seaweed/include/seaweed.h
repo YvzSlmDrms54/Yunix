@@ -148,8 +148,8 @@ const char *pci_vendor_name(uint16_t vendor);
 
 /* --- SATA (AHCI) --- */
 
-/* What Seaweed found on the AHCI controller's ports at boot. Fish does
- * not use these yet: reading and writing through AHCI comes next. */
+/* What Seaweed found on the AHCI controller's ports at boot. The disks
+ * among them are also in the disk list below, where Fish can use them. */
 #define AHCI_MAX_DEVICES 32
 
 enum ahci_kind {
@@ -172,10 +172,35 @@ int ahci_count(void);
 const struct ahci_device *ahci_get(int index);   /* NULL past the end */
 
 
-/* --- disk --- */
+/* --- disks ---
+ *
+ * Every disk Seaweed can use, IDE or SATA, numbered from 0. Fish lives
+ * on one of them at a time - the selected disk - and everything below
+ * (disk_info, partitions, Fish itself) is about that one. Reading and
+ * writing sectors is the kernel's business; go through Fish. */
 
-/* 1 if a disk was found on the primary IDE channel at boot, 0 if not.
- * Reading and writing sectors is the kernel's business; go through Fish. */
+#define BLOCK_MAX 8
+
+enum block_kind { BLOCK_IDE, BLOCK_SATA };
+
+struct block_info {
+    enum block_kind kind;
+    int             port;        /* SATA port; 0 for the IDE disk */
+    uint64_t        sectors;     /* full size, even if more than Seaweed can reach */
+    const char     *model;
+};
+
+int block_count(void);
+int block_get(int index, struct block_info *out);   /* 0, or -1 if no such disk */
+int block_current(void);                             /* the selected disk, or -1 */
+
+/* Selects disk 'index' for Fish and reads its partition table again.
+ * The files in memory are not touched: the caller decides whether to
+ * load Fish from the new disk. Returns the new layout, or -1 if there is
+ * no such disk. */
+int disk_select(int index);
+
+/* 1 if a disk was found on the primary IDE channel at boot, 0 if not. */
 int ata_present(void);
 
 /* What is on the disk, as far as Fish is concerned. Seaweed reads the
@@ -311,6 +336,9 @@ int  fish_load(void);
  * first creates a partition table with one Fish partition. On a disk that
  * holds anything else it refuses (FISH_ERR_FOREIGN) and changes nothing. */
 int  fish_format(void);
+
+/* 1 if the files in memory have changes that are not on the disk yet. */
+int  fish_unsaved(void);
 
 /* Turns an error code into something a human can read. */
 const char *fish_error(int code);

@@ -9,7 +9,7 @@
 
 #include "seaweed.h"
 #include "string.h"
-#include "ata.h"
+#include "block.h"
 #include "partition.h"
 #include "heap.h"
 #include <stdint.h>
@@ -25,6 +25,12 @@ struct node {
 
 static struct node nodes[FISH_MAX_NODES];
 static int current;                /* index of the current directory */
+
+/* Set by every change, cleared by save, load and init: whether the
+ * files in memory hold something the disk does not. */
+static int unsaved;
+
+int fish_unsaved(void) { return unsaved; }
 
 /* --- helpers --- */
 
@@ -85,6 +91,7 @@ static int make_node(const char *name, int is_dir)
     nodes[index].parent = current;
     nodes[index].size   = 0;
 
+    unsaved = 1;
     return index;
 }
 
@@ -101,6 +108,7 @@ void fish_init(void)
     nodes[0].size   = 0;
 
     current = 0;
+    unsaved = 0;
 }
 
 int fish_mkdir(const char *name)
@@ -156,6 +164,7 @@ int fish_remove(const char *name)
     }
 
     nodes[index].used = 0;
+    unsaved = 1;
     return FISH_OK;
 }
 
@@ -172,6 +181,7 @@ int fish_write(const char *name, const char *text)
 
     memcpy(nodes[index].data, text, length);
     nodes[index].size = length;
+    unsaved = 1;
     return FISH_OK;
 }
 
@@ -188,6 +198,7 @@ int fish_append(const char *name, const char *text)
 
     memcpy(nodes[index].data + nodes[index].size, text, length);
     nodes[index].size += length;
+    unsaved = 1;
     return FISH_OK;
 }
 
@@ -291,7 +302,7 @@ struct superblock {
 
 /* How many whole sectors the node array needs. */
 #define NODE_BYTES   (sizeof(nodes))
-#define NODE_SECTORS ((NODE_BYTES + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE)
+#define NODE_SECTORS ((NODE_BYTES + BLOCK_SECTOR_SIZE - 1) / BLOCK_SECTOR_SIZE)
 /* The image is the superblock in sector 0 of the Fish partition, then
  * the nodes. Sector numbers here count from the start of the partition;
  * partition.c turns them into disk sectors and refuses anything outside
@@ -316,7 +327,7 @@ static int disk_ready(void)
 
 int fish_save(void)
 {
-    char sector[ATA_SECTOR_SIZE];
+    char sector[BLOCK_SECTOR_SIZE];
     struct superblock sb;
     const char *source = (const char *)nodes;
     uint32_t written = 0;
@@ -341,8 +352,8 @@ int fish_save(void)
      * is padded with zeros rather than with whatever follows in memory. */
     for (uint32_t s = 0; s < NODE_SECTORS; s++) {
         uint32_t remaining = (uint32_t)NODE_BYTES - written;
-        uint32_t chunk = remaining < ATA_SECTOR_SIZE ? remaining
-                                                     : ATA_SECTOR_SIZE;
+        uint32_t chunk = remaining < BLOCK_SECTOR_SIZE ? remaining
+                                                     : BLOCK_SECTOR_SIZE;
 
         memset(sector, 0, sizeof(sector));
         memcpy(sector, source + written, chunk);
@@ -356,6 +367,7 @@ int fish_save(void)
     memcpy(sector, &sb, sizeof(sb));
     if (partition_write(0, sector) != 0) return FISH_ERR_IO;
 
+    unsaved = 0;
     return FISH_OK;
 }
 
@@ -402,7 +414,7 @@ static int image_is_sane(const struct node *image)
 
 int fish_load(void)
 {
-    char sector[ATA_SECTOR_SIZE];
+    char sector[BLOCK_SECTOR_SIZE];
     struct superblock sb;
     struct node *image;
     char *dest;
@@ -431,8 +443,8 @@ int fish_load(void)
 
     for (uint32_t s = 0; s < NODE_SECTORS; s++) {
         uint32_t remaining = (uint32_t)NODE_BYTES - read_so_far;
-        uint32_t chunk = remaining < ATA_SECTOR_SIZE ? remaining
-                                                     : ATA_SECTOR_SIZE;
+        uint32_t chunk = remaining < BLOCK_SECTOR_SIZE ? remaining
+                                                     : BLOCK_SECTOR_SIZE;
 
         if (partition_read(1 + s, sector) != 0) {
             kfree(image);
@@ -461,6 +473,7 @@ int fish_load(void)
         current = (int)sb.current;
     }
 
+    unsaved = 0;
     return FISH_OK;
 }
 

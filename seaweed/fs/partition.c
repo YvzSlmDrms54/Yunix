@@ -28,7 +28,7 @@
  */
 
 #include "partition.h"
-#include "ata.h"
+#include "block.h"
 #include "heap.h"
 #include "string.h"
 
@@ -57,8 +57,6 @@
  * signature as "not initialised". The bytes spell "YUNX". */
 #define MBR_DISK_SIGNATURE     0x584E5559u
 
-/* 28-bit LBA cannot reach past this sector. */
-#define LBA28_LIMIT            0x10000000u
 
 #define GPT_ENTRIES_MAX        256
 #define MAX_PARTS              128
@@ -125,8 +123,9 @@ static void put64(uint8_t *p, uint32_t value)
 /* The disk as far as we can reach it. */
 static uint32_t disk_end(void)
 {
-    uint32_t disk = ata_sectors();
-    return disk > LBA28_LIMIT ? LBA28_LIMIT : disk;
+    /* The block layer already caps this at what the disk's driver and
+     * 32-bit sector numbers can reach. */
+    return block_sectors();
 }
 
 /* The CRC32 GPT uses - the same one as zip and Ethernet. Bit by bit
@@ -146,18 +145,12 @@ static uint32_t crc32(const uint8_t *data, size_t length)
 
 static int read_sectors(uint32_t lba, uint32_t count, uint8_t *buffer)
 {
-    for (uint32_t i = 0; i < count; i++) {
-        if (ata_read(lba + i, 1, buffer + i * ATA_SECTOR_SIZE) != 0) return -1;
-    }
-    return 0;
+    return block_read(lba, count, buffer);
 }
 
 static int write_sectors(uint32_t lba, uint32_t count, const uint8_t *buffer)
 {
-    for (uint32_t i = 0; i < count; i++) {
-        if (ata_write(lba + i, 1, buffer + i * ATA_SECTOR_SIZE) != 0) return -1;
-    }
-    return 0;
+    return block_write(lba, count, buffer);
 }
 
 /* Records one partition. Anything that runs past the end of the disk, or
@@ -241,7 +234,7 @@ static const char *gpt_kind(const uint8_t *guid)
 
 /* Everything about one copy of the GPT: its header, and its entries. */
 struct gpt {
-    uint8_t  header[ATA_SECTOR_SIZE];
+    uint8_t  header[BLOCK_SECTOR_SIZE];
     uint32_t header_lba;
     uint32_t header_size;
     uint32_t backup_lba;     /* where the header says the other copy is */
@@ -263,11 +256,11 @@ static int gpt_read(uint32_t lba, struct gpt *g)
     g->header_lba = lba;
 
     if (lba >= disk_end()) return -1;
-    if (ata_read(lba, 1, g->header) != 0) return -1;
+    if (block_read(lba, 1, g->header) != 0) return -1;
     if (memcmp(g->header, "EFI PART", 8) != 0) return -1;
 
     g->header_size = get32(g->header + 12);
-    if (g->header_size < 92 || g->header_size > ATA_SECTOR_SIZE) return -1;
+    if (g->header_size < 92 || g->header_size > BLOCK_SECTOR_SIZE) return -1;
 
     /* The header checksum is taken with its own field set to zero. */
     memcpy(saved, g->header + 16, 4);
@@ -280,15 +273,15 @@ static int gpt_read(uint32_t lba, struct gpt *g)
     g->count = get32(g->header + 80);
     g->entry_size = get32(g->header + 84);
 
-    if (g->entry_size < 128 || g->entry_size > ATA_SECTOR_SIZE ||
-        ATA_SECTOR_SIZE % g->entry_size != 0) return -1;
+    if (g->entry_size < 128 || g->entry_size > BLOCK_SECTOR_SIZE ||
+        BLOCK_SECTOR_SIZE % g->entry_size != 0) return -1;
     if (g->count == 0 || g->count > GPT_ENTRIES_MAX) return -1;
 
     bytes = g->count * g->entry_size;
-    g->entries_sectors = (bytes + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE;
+    g->entries_sectors = (bytes + BLOCK_SECTOR_SIZE - 1) / BLOCK_SECTOR_SIZE;
     if (g->entries_lba + g->entries_sectors > disk_end()) return -1;
 
-    g->entries = kcalloc(g->entries_sectors, ATA_SECTOR_SIZE);
+    g->entries = kcalloc(g->entries_sectors, BLOCK_SECTOR_SIZE);
     if (g->entries == 0) return -1;
 
     if (read_sectors(g->entries_lba, g->entries_sectors, g->entries) != 0 ||
@@ -377,11 +370,11 @@ static void scan_mbr(const uint8_t *sector)
 /* Is the start of the disk entirely zeros? */
 static int disk_is_blank(void)
 {
-    uint8_t sector[ATA_SECTOR_SIZE];
+    uint8_t sector[BLOCK_SECTOR_SIZE];
 
     for (uint32_t s = 0; s < BLANK_CHECK_SECTORS; s++) {
-        if (ata_read(s, 1, sector) != 0) return 0;     /* unreadable is not blank */
-        for (int i = 0; i < ATA_SECTOR_SIZE; i++) if (sector[i] != 0) return 0;
+        if (block_read(s, 1, sector) != 0) return 0;     /* unreadable is not blank */
+        for (int i = 0; i < BLOCK_SECTOR_SIZE; i++) if (sector[i] != 0) return 0;
     }
     return 1;
 }
@@ -390,7 +383,7 @@ static int disk_is_blank(void)
 
 enum disk_layout partition_scan(void)
 {
-    uint8_t sector[ATA_SECTOR_SIZE];
+    uint8_t sector[BLOCK_SECTOR_SIZE];
 
     layout = DISK_NONE;
     kind = TABLE_NONE;
@@ -402,13 +395,13 @@ enum disk_layout partition_scan(void)
     gpt_first_usable = 0;
     gpt_last_usable = 0;
 
-    if (!ata_present()) return layout;
+    if (!block_present()) return layout;
 
     /* Anything we do not recognise as ours is someone else's. Only a
      * Fish partition, or a disk with nothing at all on it, changes that. */
     layout = DISK_FOREIGN;
 
-    if (ata_read(0, 1, sector) != 0) { understood = 0; return layout; }
+    if (block_read(0, 1, sector) != 0) { understood = 0; return layout; }
 
     if (sector[MBR_SIGNATURE_OFFSET] == 0x55 && sector[MBR_SIGNATURE_OFFSET + 1] == 0xAA) {
         scan_mbr(sector);
@@ -505,7 +498,7 @@ int disk_free_space(struct disk_region *out, int max)
 
 static int create_on_blank(uint32_t start, uint32_t sectors)
 {
-    uint8_t  sector[ATA_SECTOR_SIZE];
+    uint8_t  sector[BLOCK_SECTOR_SIZE];
     uint8_t *entry = sector + MBR_TABLE_OFFSET;
 
     memset(sector, 0, sizeof(sector));
@@ -523,7 +516,7 @@ static int create_on_blank(uint32_t start, uint32_t sectors)
     sector[MBR_SIGNATURE_OFFSET] = 0x55;
     sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
 
-    return ata_write(0, 1, sector) == 0 ? DISK_OK : DISK_ERR_IO;
+    return block_write(0, 1, sector) == 0 ? DISK_OK : DISK_ERR_IO;
 }
 
 /* Fills one empty slot in an existing MBR. Sector 0 is read back fresh,
@@ -531,9 +524,9 @@ static int create_on_blank(uint32_t start, uint32_t sectors)
  * every other entry are written back exactly as they were. */
 static int create_in_mbr(uint32_t start, uint32_t sectors)
 {
-    uint8_t sector[ATA_SECTOR_SIZE];
+    uint8_t sector[BLOCK_SECTOR_SIZE];
 
-    if (ata_read(0, 1, sector) != 0) return DISK_ERR_IO;
+    if (block_read(0, 1, sector) != 0) return DISK_ERR_IO;
 
     for (int i = 0; i < MBR_ENTRIES; i++) {
         uint8_t *entry = sector + MBR_TABLE_OFFSET + i * MBR_ENTRY_SIZE;
@@ -547,7 +540,7 @@ static int create_in_mbr(uint32_t start, uint32_t sectors)
         put32(entry + 8, start);
         put32(entry + 12, sectors);
 
-        return ata_write(0, 1, sector) == 0 ? DISK_OK : DISK_ERR_IO;
+        return block_write(0, 1, sector) == 0 ? DISK_OK : DISK_ERR_IO;
     }
 
     /* Extended partitions could hold more, but four is where plain MBR
@@ -633,9 +626,9 @@ static int create_in_gpt(uint32_t start, uint32_t sectors)
      * own, which is what having two copies is for. */
     result = DISK_ERR_IO;
     if (write_sectors(primary.entries_lba, primary.entries_sectors, primary.entries) != 0) goto done;
-    if (ata_write(primary.header_lba, 1, primary.header) != 0) goto done;
+    if (block_write(primary.header_lba, 1, primary.header) != 0) goto done;
     if (write_sectors(backup.entries_lba, backup.entries_sectors, backup.entries) != 0) goto done;
-    if (ata_write(backup.header_lba, 1, backup.header) != 0) goto done;
+    if (block_write(backup.header_lba, 1, backup.header) != 0) goto done;
     result = DISK_OK;
 
 done:
@@ -717,14 +710,22 @@ uint32_t partition_size(void)
 int partition_read(uint32_t sector, void *buffer)
 {
     if (layout != DISK_FISH || sector >= fish_sectors) return -1;
-    return ata_read(fish_start + sector, 1, buffer);
+    return block_read(fish_start + sector, 1, buffer);
 }
 
 int partition_write(uint32_t sector, const void *buffer)
 {
     /* The one rule this whole file exists for. */
     if (layout != DISK_FISH || sector >= fish_sectors) return -1;
-    return ata_write(fish_start + sector, 1, buffer);
+    return block_write(fish_start + sector, 1, buffer);
+}
+
+/* --- choosing the disk --- */
+
+int disk_select(int index)
+{
+    if (block_select(index) != 0) return -1;
+    return (int)partition_scan();
 }
 
 /* --- reporting --- */
@@ -732,7 +733,7 @@ int partition_write(uint32_t sector, const void *buffer)
 void disk_info(struct disk_info *out)
 {
     out->layout       = layout;
-    out->sectors      = ata_sectors();
+    out->sectors      = block_sectors();
     out->table        = table;
     out->partitions   = partitions;
     out->fish_start   = fish_start;
