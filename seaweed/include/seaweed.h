@@ -146,6 +146,32 @@ const char *pci_class_name(const struct pci_device *device);
 const char *pci_vendor_name(uint16_t vendor);
 
 
+/* --- SATA (AHCI) --- */
+
+/* What Seaweed found on the AHCI controller's ports at boot. Fish does
+ * not use these yet: reading and writing through AHCI comes next. */
+#define AHCI_MAX_DEVICES 32
+
+enum ahci_kind {
+    AHCI_DISK,          /* a hard disk or SSD */
+    AHCI_ATAPI,         /* a CD/DVD drive */
+    AHCI_OTHER          /* a port multiplier, an enclosure, ... */
+};
+
+struct ahci_device {
+    int            port;        /* 0-31 on the controller */
+    enum ahci_kind kind;
+    int            identified;  /* 1 if it answered IDENTIFY */
+    char           model[41];   /* as the device names itself */
+    uint64_t       sectors;     /* size in 512-byte sectors, disks only */
+    int            lba48;       /* 1 if it supports 48-bit addressing */
+};
+
+int ahci_present(void);         /* 1 if an AHCI controller was taken over */
+int ahci_count(void);
+const struct ahci_device *ahci_get(int index);   /* NULL past the end */
+
+
 /* --- disk --- */
 
 /* 1 if a disk was found on the primary IDE channel at boot, 0 if not.

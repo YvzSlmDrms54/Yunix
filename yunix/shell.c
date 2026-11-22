@@ -401,6 +401,52 @@ static int cmd_format(const char *arg)
     return 0;
 }
 
+/* Lists what is on the SATA controller, if there is one. Fish cannot use
+ * these disks yet - that needs the AHCI read and write commands. */
+static void list_sata(void)
+{
+    char buffer[12];
+
+    if (!ahci_present()) return;
+
+    vga_write("SATA (AHCI):");
+    if (ahci_count() == 0) vga_write(" nothing plugged in");
+    vga_putchar('\n');
+
+    for (int i = 0; i < ahci_count(); i++) {
+        const struct ahci_device *d = ahci_get(i);
+
+        vga_write("  port ");
+        utoa((unsigned int)d->port, buffer, 10);
+        vga_write(buffer);
+        vga_write(": ");
+
+        switch (d->kind) {
+        case AHCI_DISK:  vga_write("disk"); break;
+        case AHCI_ATAPI: vga_write("CD/DVD drive"); break;
+        default:         vga_write("other device"); break;
+        }
+
+        if (!d->identified) {
+            if (d->kind != AHCI_OTHER) vga_write(", did not answer IDENTIFY");
+            vga_putchar('\n');
+            continue;
+        }
+
+        if (d->model[0] != '\0') { vga_write(", "); vga_write(d->model); }
+        if (d->kind == AHCI_DISK) {
+            vga_write(", ");
+            /* Shifting, not dividing: 64-bit division would need a
+             * helper library we do not have. */
+            utoa((unsigned int)(d->sectors >> 11), buffer, 10);
+            vga_write(buffer);
+            vga_write(" MiB");
+            if (!d->lba48) vga_write(", 28-bit only");
+        }
+        vga_putchar('\n');
+    }
+}
+
 static int cmd_disk(const char *arg)
 {
     struct disk_info info;
@@ -409,13 +455,16 @@ static int cmd_disk(const char *arg)
     (void)arg;
     disk_info(&info);
 
-    /* Fails when there is no disk, so "disk && save" does what it says. */
+    list_sata();
+
+    /* Fails when there is no disk for Fish, so "disk && save" does what
+     * it says. */
     if (info.layout == DISK_NONE) {
-        vga_write("Primary master: not found\n");
+        vga_write("IDE primary master: not found\n");
         return 1;
     }
 
-    vga_write("Primary master: ");
+    vga_write("IDE primary master (used by Fish): ");
     write_mib(info.sectors);
     vga_write("\nPartition table: ");
     vga_write(info.table);

@@ -17,6 +17,11 @@
  * Call after idt_init(), so a page fault has somewhere to go. */
 void paging_init(void);
 
+/* Maps a device's registers - 'size' bytes from 'physical' - with
+ * caching off, at the same address, and returns that address as a
+ * pointer. Returns NULL if it cannot (page 0, or out of page tables). */
+void *paging_map_device(uint32_t physical, uint32_t size);
+
 /* The address that caused the last page fault. The CPU leaves it in the
  * CR2 register. */
 uint32_t paging_fault_address(void);

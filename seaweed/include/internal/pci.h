@@ -14,6 +14,10 @@ void pci_init(void);
  * multiple of 4. */
 uint32_t pci_config_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset);
 
+/* Lets a device answer at its memory BARs and do DMA. The one write to
+ * configuration space Seaweed makes, and only for a device it drives. */
+void pci_enable(const struct pci_device *device);
+
 /* The first device of a given class/subclass/programming interface, or
  * NULL. pci_find(0x01, 0x06, 0x01) is the first AHCI controller. */
 const struct pci_device *pci_find(uint8_t class_code, uint8_t subclass, uint8_t prog_if);

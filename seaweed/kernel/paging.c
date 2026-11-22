@@ -70,6 +70,55 @@ void paging_init(void)
     __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0) : "memory");
 }
 
+/* --- device memory ---
+ *
+ * Some devices put their registers in the memory address space, often
+ * close to 4 GiB - far above the identity map. Those pages get mapped
+ * one at a time, still at the same address (so a driver can use the
+ * physical address it read from PCI as a pointer), but with caching
+ * turned off: a device register has to be read from the device every
+ * time, not from a copy the CPU kept, and every write has to reach it. */
+
+#define PAGE_WRITE_THROUGH 0x008
+#define PAGE_CACHE_DISABLE 0x010
+#define DEVICE_TABLES      4          /* room for four 4 MiB windows */
+
+static uint32_t device_tables[DEVICE_TABLES][ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static int      device_tables_used;
+
+void *paging_map_device(uint32_t physical, uint32_t size)
+{
+    uint32_t start = physical & ~(uint32_t)(PAGE_SIZE - 1);
+    uint32_t end;
+
+    if (size == 0 || start == 0) return 0;              /* page 0 stays unmapped */
+    if (physical + size < physical) return 0;           /* wraps past 4 GiB */
+    end = physical + size;
+
+    for (uint32_t page = start; page < end && page >= start; page += PAGE_SIZE) {
+        uint32_t d = page >> 22;
+        uint32_t *table;
+
+        if (!(page_directory[d] & PAGE_PRESENT)) {
+            if (device_tables_used == DEVICE_TABLES) return 0;
+            table = device_tables[device_tables_used++];
+            for (uint32_t i = 0; i < ENTRIES; i++) table[i] = 0;
+            page_directory[d] = (uint32_t)table | PAGE_PRESENT | PAGE_WRITABLE;
+        }
+
+        table = (uint32_t *)(page_directory[d] & ~(uint32_t)(PAGE_SIZE - 1));
+        table[(page >> 12) & (ENTRIES - 1)] =
+            page | PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHE_DISABLE | PAGE_WRITE_THROUGH;
+
+        /* The CPU may still hold the old translation; make it forget. */
+        __asm__ volatile ("invlpg (%0)" : : "r"(page) : "memory");
+
+        if (page + PAGE_SIZE < page) break;             /* the last page of memory */
+    }
+
+    return (void *)physical;
+}
+
 uint32_t paging_fault_address(void)
 {
     uint32_t address;

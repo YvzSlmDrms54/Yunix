@@ -20,8 +20,8 @@
  * 0xCF8 saying which bus, slot, function and register, then read the
  * value from 0xCFC. Every PC since the mid-1990s supports this.
  *
- * This file only ever reads. Working out how big a BAR is means writing
- * to it, and that is left to the driver that owns the device.
+ * The scan only reads. The one write, pci_enable(), is made by a driver
+ * for the device it is about to use.
  */
 
 #include "pci.h"
@@ -51,6 +51,24 @@ uint32_t pci_config_read(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset
 
     outl(PCI_ADDRESS, address);
     return inl(PCI_DATA);
+}
+
+void pci_enable(const struct pci_device *d)
+{
+    /* The command register is the low half of offset 0x04; the high half
+     * is the status register, whose bits are cleared by writing 1. Writing
+     * zeros there leaves the status alone. */
+    uint32_t command = pci_config_read(d->bus, d->slot, d->func, 0x04) & 0xFFFF;
+    uint32_t address = 0x80000000u |
+                       ((uint32_t)d->bus << 16) |
+                       ((uint32_t)(d->slot & 0x1F) << 11) |
+                       ((uint32_t)(d->func & 0x07) << 8) | 0x04;
+
+    command |= 0x0002;          /* memory space: answer at its BARs */
+    command |= 0x0004;          /* bus master: may read and write memory (DMA) */
+
+    outl(PCI_ADDRESS, address);
+    outl(PCI_DATA, command);
 }
 
 static void remember(uint8_t bus, uint8_t slot, uint8_t func)

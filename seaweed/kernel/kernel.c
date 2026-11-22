@@ -16,6 +16,7 @@
 #include "heap.h"
 #include "partition.h"
 #include "pci.h"
+#include "ahci.h"
 #include "string.h"
 
 /* Prints a sector count as whole MiB (2048 sectors of 512 bytes each). */
@@ -60,6 +61,52 @@ static void report_pci(void)
     vga_putchar('\n');
 }
 
+/* One boot line about the SATA controller, if there is one: its AHCI
+ * version, then how many disks and CD drives hang off it. */
+static void report_ahci(int found)
+{
+    uint32_t version = ahci_version();
+    int disks = 0, drives = 0;
+    char buffer[12];
+
+    if (found < 0) {
+        if (pci_find(0x01, 0x06, 0x01) != 0) {
+            vga_set_color(VGA_YELLOW, VGA_BLACK);
+            vga_write("[ .. ] AHCI controller found, but it could not be reached\n");
+            vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        }
+        return;
+    }
+
+    for (int i = 0; i < ahci_count(); i++) {
+        if (ahci_get(i)->kind == AHCI_DISK)  disks++;
+        if (ahci_get(i)->kind == AHCI_ATAPI) drives++;
+    }
+
+    vga_write("[ ok ] AHCI ");
+    utoa(version >> 16, buffer, 10);
+    vga_write(buffer);
+    vga_putchar('.');
+    utoa((version >> 8) & 0xFF, buffer, 10);
+    vga_write(buffer);
+    if (version & 0xFF) {
+        vga_putchar('.');
+        utoa(version & 0xFF, buffer, 10);
+        vga_write(buffer);
+    }
+    vga_write(": ");
+    utoa((unsigned int)disks, buffer, 10);
+    vga_write(buffer);
+    vga_write(disks == 1 ? " SATA disk" : " SATA disks");
+    if (drives > 0) {
+        vga_write(", ");
+        utoa((unsigned int)drives, buffer, 10);
+        vga_write(buffer);
+        vga_write(drives == 1 ? " CD/DVD drive" : " CD/DVD drives");
+    }
+    vga_putchar('\n');
+}
+
 void kernel_main(void)
 {
     vga_init();
@@ -91,6 +138,7 @@ void kernel_main(void)
 
     pci_init();
     report_pci();
+    report_ahci(ahci_init());
 
     fish_init();
     if (ata_init()) {
@@ -123,7 +171,7 @@ void kernel_main(void)
         }
     } else {
         vga_set_color(VGA_YELLOW, VGA_BLACK);
-        vga_write("[ .. ] No disk found. Files will vanish on reboot.\n");
+        vga_write("[ .. ] No IDE disk for Fish. Files will vanish on reboot.\n");
     }
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
