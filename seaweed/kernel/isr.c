@@ -6,6 +6,7 @@
 #include "idt.h"
 #include "io.h"
 #include "vga.h"
+#include "paging.h"
 
 static const char *exception_names[32] = {
     "Divide by zero",          "Debug",
@@ -34,6 +35,39 @@ void irq_install_handler(int num, irq_handler_t handler)
     if (num >= 0 && num < 16) irq_handlers[num] = handler;
 }
 
+/* Prints a value as 0x followed by exactly eight hex digits. */
+static void write_hex(uint32_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+    char text[11];
+
+    text[0] = '0';
+    text[1] = 'x';
+    for (int i = 0; i < 8; i++) {
+        text[2 + i] = digits[(value >> (28 - 4 * i)) & 0xF];
+    }
+    text[10] = '\0';
+    vga_write(text);
+}
+
+/* A page fault's error code says why the access failed. */
+static void explain_page_fault(uint32_t err_code)
+{
+    uint32_t address = paging_fault_address();
+
+    vga_write("Address: ");
+    write_hex(address);
+    if (address < 0x1000) vga_write("  (a NULL pointer)");
+    vga_putchar('\n');
+
+    vga_write("Reason:  ");
+    vga_write((err_code & 0x1) ? "protection violation" : "page not mapped");
+    vga_write((err_code & 0x2) ? ", on a write" : ", on a read");
+    vga_write((err_code & 0x4) ? ", from user mode" : ", from the kernel");
+    if (err_code & 0x10) vga_write(", fetching code");
+    vga_putchar('\n');
+}
+
 /* Called for CPU exceptions (interrupts 0-31). */
 void isr_handler(struct registers *regs)
 {
@@ -45,7 +79,20 @@ void isr_handler(struct registers *regs)
     } else {
         vga_write("Unknown exception");
     }
-    vga_write("\nSystem halted.\n");
+    vga_putchar('\n');
+
+    /* Where it happened. Look the address up with
+     *     objdump -d seaweed.bin | grep -B5 <address without 0x>
+     * to find the instruction, and the function it is in. */
+    vga_write("EIP:     ");
+    write_hex(regs->eip);
+    vga_write("   Error code: ");
+    write_hex(regs->err_code);
+    vga_putchar('\n');
+
+    if (regs->int_no == 14) explain_page_fault(regs->err_code);
+
+    vga_write("System halted.\n");
 
     /* Nothing sensible left to do. Stop for good. */
     for (;;) __asm__ volatile ("cli; hlt");

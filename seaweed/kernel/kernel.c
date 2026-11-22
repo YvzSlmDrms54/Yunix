@@ -9,6 +9,7 @@
 #include "vga.h"
 #include "gdt.h"
 #include "idt.h"
+#include "paging.h"
 #include "keyboard.h"
 #include "timer.h"
 #include "ata.h"
@@ -27,6 +28,9 @@ void kernel_main(void)
 
     idt_init();
     vga_write("[ ok ] IDT loaded, PIC remapped to 32-47\n");
+
+    paging_init();
+    vga_write("[ ok ] Paging on: 16 MiB identity-mapped, page 0 left out\n");
 
     timer_init();
     vga_write("[ ok ] PIT running at 100 Hz on IRQ 0\n");
