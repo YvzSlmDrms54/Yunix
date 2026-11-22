@@ -441,8 +441,177 @@ static int cmd_disk(const char *arg)
         break;
     default:
         vga_write("No Fish partition. Yunix will not write to this disk.\n");
+        vga_write("Type partition to look for free space for one.\n");
         break;
     }
+    return 0;
+}
+
+/* Reads a whole decimal number. Returns 0 if 'text' is not one, or does
+ * not fit in 32 bits. */
+static int parse_number(const char *text, uint32_t *out)
+{
+    uint32_t value = 0;
+
+    if (text[0] == '\0') return 0;
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        if (text[i] < '0' || text[i] > '9') return 0;
+        if (value > (0xFFFFFFFFu - 9) / 10) return 0;
+        value = value * 10 + (uint32_t)(text[i] - '0');
+    }
+    *out = value;
+    return 1;
+}
+
+#define PARTITION_LIST_MAX 32
+
+static void write_number(uint32_t value)
+{
+    char buffer[12];
+
+    utoa(value, buffer, 10);
+    vga_write(buffer);
+}
+
+static void list_partitions(void)
+{
+    struct disk_info info;
+    struct disk_partition parts[PARTITION_LIST_MAX];
+    struct disk_region free_space[PARTITION_LIST_MAX];
+    int part_count, free_count;
+
+    disk_info(&info);
+
+    vga_write("Disk: ");
+    write_mib(info.sectors);
+    vga_write(", partition table: ");
+    vga_write(info.table);
+    vga_putchar('\n');
+
+    part_count = disk_partitions(parts, PARTITION_LIST_MAX);
+    if (part_count == 0) vga_write("Partitions: none\n");
+    else                 vga_write("Partitions:\n");
+    for (int i = 0; i < part_count; i++) {
+        vga_write("   from sector ");
+        write_number(parts[i].start);
+        vga_write(", ");
+        write_mib(parts[i].sectors);
+        vga_write(", ");
+        vga_write(parts[i].kind);
+        vga_putchar('\n');
+    }
+
+    if (!info.understood) {
+        vga_write("Yunix cannot make sense of this table, so it will not change it.\n");
+        return;
+    }
+
+    free_count = disk_free_space(free_space, PARTITION_LIST_MAX);
+    if (free_count == 0) {
+        vga_write("Free space: none (a Fish partition needs at least 1 MiB)\n");
+        return;
+    }
+
+    vga_write("Free space:\n");
+    for (int i = 0; i < free_count; i++) {
+        vga_write("  ");
+        write_number((uint32_t)i + 1);
+        vga_write(". from sector ");
+        write_number(free_space[i].start);
+        vga_write(", ");
+        write_mib(free_space[i].sectors);
+        vga_putchar('\n');
+    }
+
+    if (info.layout != DISK_FISH) {
+        vga_write("To use one: partition new <number> [size in MiB]\n");
+    }
+}
+
+/* partition                       - list partitions and free space
+ * partition new <n> [MiB] [yes]   - make a Fish partition in free space n */
+static int cmd_partition(const char *arg)
+{
+    struct disk_region free_space[PARTITION_LIST_MAX];
+    char words[4][16];
+    int word_count = 0;
+    uint32_t which, size_mib = 0, sectors;
+    int confirmed = 0, free_count, result;
+    size_t i = 0;
+
+    if (!ata_present()) { vga_write("partition: no disk found\n"); return 1; }
+
+    /* Split the argument into words. */
+    while (arg[i] != '\0') {
+        size_t n = 0;
+
+        while (arg[i] == ' ') i++;
+        if (arg[i] == '\0') break;
+        if (word_count == 4) { vga_write("partition: too many words\n"); return 1; }
+        while (arg[i] != '\0' && arg[i] != ' ') {
+            if (n < sizeof(words[0]) - 1) words[word_count][n++] = arg[i];
+            i++;
+        }
+        words[word_count++][n] = '\0';
+    }
+
+    if (word_count == 0) { list_partitions(); return 0; }
+
+    if (strcmp(words[0], "new") != 0 || word_count < 2) {
+        vga_write("Usage: partition                      list partitions and free space\n");
+        vga_write("       partition new <n> [MiB] [yes]  make a Fish partition there\n");
+        return 1;
+    }
+
+    if (!parse_number(words[1], &which) || which == 0) {
+        vga_write("partition: pick a free space number from the list\n");
+        return 1;
+    }
+    for (int w = 2; w < word_count; w++) {
+        if (strcmp(words[w], "yes") == 0 && w == word_count - 1) confirmed = 1;
+        else if (w == 2 && parse_number(words[w], &size_mib) && size_mib > 0) { }
+        else { vga_write("partition: the size must be a number of MiB\n"); return 1; }
+    }
+
+    free_count = disk_free_space(free_space, PARTITION_LIST_MAX);
+    if (which > (uint32_t)free_count) {
+        vga_write("partition: there is no free space with that number. Type partition.\n");
+        return 1;
+    }
+
+    sectors = free_space[which - 1].sectors;
+    if (size_mib > 0) {
+        if (size_mib > sectors / 2048) {
+            vga_write("partition: that free space only holds ");
+            write_mib(sectors);
+            vga_putchar('\n');
+            return 1;
+        }
+        sectors = size_mib * 2048;
+    }
+
+    if (!confirmed) {
+        vga_write("This creates a Fish partition from sector ");
+        write_number(free_space[which - 1].start);
+        vga_write(", ");
+        write_mib(sectors);
+        vga_write(",\nin space no partition uses. Nothing else on the disk changes.\n");
+        vga_write("Type: partition new ");
+        vga_write(words[1]);
+        if (size_mib > 0) { vga_putchar(' '); vga_write(words[2]); }
+        vga_write(" yes\n");
+        return 1;
+    }
+
+    result = disk_create_fish(free_space[which - 1].start, sectors);
+    if (result != DISK_OK) {
+        vga_write("partition: ");
+        vga_write(disk_error(result));
+        vga_putchar('\n');
+        return 1;
+    }
+
+    vga_write("Fish partition created. Type format yes to set up Fish on it.\n");
     return 0;
 }
 
@@ -525,6 +694,7 @@ static const struct command commands[] = {
     { "load",     "",               "read the filesystem from disk",     cmd_load     },
     { "format",   "yes",            "erase the filesystem and save it",  cmd_format   },
     { "disk",     "",               "is there a disk attached?",         cmd_disk     },
+    { "partition", "[new <n>]",     "partitions, free space, new Fish",  cmd_partition },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },
     { "whoami",   "",               "print the current user name",       cmd_whoami   },
     { "user",     "<name>",         "change the user name",              cmd_user     },

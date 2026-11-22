@@ -147,9 +147,47 @@ struct disk_info {
     int         partitions;     /* how many entries the table lists */
     uint32_t    fish_start;     /* the Fish partition, if layout is DISK_FISH */
     uint32_t    fish_sectors;
+    int         understood;     /* 1 if every entry made sense, so free space
+                                   can be worked out and a partition added */
 };
 
 void disk_info(struct disk_info *out);
+
+/* One partition from the table, and one stretch of free space. */
+struct disk_partition {
+    uint32_t    start;
+    uint32_t    sectors;
+    const char *kind;           /* "Linux filesystem", "Fish", "other", ... */
+};
+
+struct disk_region {
+    uint32_t start;             /* always on a 1 MiB boundary */
+    uint32_t sectors;           /* at least 1 MiB */
+};
+
+/* Fill 'out' with up to 'max' entries and return how many there are. */
+int disk_partitions(struct disk_partition *out, int max);
+int disk_free_space(struct disk_region *out, int max);
+
+/* Adds a Fish partition from 'start' for 'sectors' sectors. The whole of
+ * it must lie inside free space, as disk_free_space() reports it: every
+ * existing partition and all their data stay exactly as they were. The
+ * only bytes written are one new entry in the partition table (and, on
+ * GPT, its checksums and the backup copy at the end of the disk).
+ * Returns DISK_OK or one of the DISK_ERR_* codes. */
+int disk_create_fish(uint32_t start, uint32_t sectors);
+
+#define DISK_OK               0
+#define DISK_ERR_NODISK      -1
+#define DISK_ERR_HAS_FISH    -2   /* there is a Fish partition already */
+#define DISK_ERR_NOT_FREE    -3   /* not inside free space */
+#define DISK_ERR_TABLE_FULL  -4   /* all four MBR slots are taken */
+#define DISK_ERR_DAMAGED     -5   /* the table does not add up */
+#define DISK_ERR_UNSUPPORTED -6   /* data but no table, or out of reach */
+#define DISK_ERR_IO          -7
+#define DISK_ERR_TOO_SMALL   -8   /* under 1 MiB */
+
+const char *disk_error(int code);
 
 
 /* --- Fish, the filesystem ---
