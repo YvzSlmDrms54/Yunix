@@ -40,6 +40,14 @@ _start:
     /* x86 stacks grow downward, so the stack pointer starts at the TOP. */
     mov $stack_top, %esp
 
+    /* The boot loader left two things in registers: EAX holds the
+     * multiboot magic number (0x2BADB002, proof a multiboot loader
+     * started us) and EBX the address of its information block - memory
+     * map, modules and so on. Push them as kernel_main's two arguments,
+     * last one first, as the C calling convention wants. */
+    push %ebx
+    push %eax
+
     /* Everything is ready. Hand control to C. */
     call kernel_main
 

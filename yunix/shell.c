@@ -887,6 +887,108 @@ static int cmd_pci(const char *arg)
     return 0;
 }
 
+/* ---- installing ---- */
+
+/* install              - which disks Yunix could be installed on
+ * install <n>          - what installing on disk n would do
+ * install <n> yes      - do it */
+static int cmd_install(const char *arg)
+{
+    struct install_check check;
+    char number[12];
+    size_t i = 0, n = 0;
+    uint32_t which;
+    int confirmed, result;
+
+    if (!install_available()) {
+        vga_write("install: ");
+        vga_write(install_error(INSTALL_ERR_NOT_LIVE));
+        vga_putchar('\n');
+        return 1;
+    }
+
+    if (block_count() == 0) {
+        vga_write("install: no disks found\n");
+        return 1;
+    }
+
+    if (arg[0] == '\0') {
+        vga_write("Disks:\n");
+        for (int d = 0; d < block_count(); d++) {
+            struct block_info b;
+
+            block_get(d, &b);
+            install_check(d, &check);
+            vga_write(check.verdict == INSTALL_NO ? "  " : "+ ");
+            write_number((uint32_t)d + 1);
+            vga_write(". ");
+            write_disk(&b);
+            vga_write("\n     ");
+            vga_write(check.reason);
+            vga_putchar('\n');
+        }
+        vga_write("To install on one marked +: install <number>\n");
+        return 0;
+    }
+
+    while (arg[i] != '\0' && arg[i] != ' ' && n < sizeof(number) - 1) number[n++] = arg[i++];
+    number[n] = '\0';
+    while (arg[i] == ' ') i++;
+    confirmed = strcmp(arg + i, "yes") == 0;
+
+    if (!parse_number(number, &which) || which == 0 || which > (uint32_t)block_count() ||
+        (arg[i] != '\0' && !confirmed)) {
+        vga_write("Usage: install [number [yes]]\n");
+        return 1;
+    }
+
+    install_check((int)which - 1, &check);
+    if (check.verdict == INSTALL_NO) {
+        vga_write("install: ");
+        vga_write(check.reason);
+        vga_putchar('\n');
+        return 1;
+    }
+
+    /* The disk's own Fish files would take the place of the ones in
+     * memory. If those have changes, they would be lost. */
+    if (check.keeps_files && fish_unsaved() && (int)which - 1 != block_current()) {
+        vga_write("The files in memory have unsaved changes, and this disk already\n");
+        vga_write("has its own Fish files, which would replace them. Save first.\n");
+        return 1;
+    }
+
+    if (!confirmed) {
+        vga_write("Installing on disk ");
+        vga_write(number);
+        vga_write(":\n  ");
+        vga_write(check.reason);
+        vga_write(".\nThe disk's boot code is replaced, so it starts Yunix.\n");
+        vga_write("Type: install ");
+        vga_write(number);
+        vga_write(" yes\n");
+        return 1;
+    }
+
+    vga_write("Installing...\n");
+    result = install_run((int)which - 1);
+    if (result != INSTALL_OK) {
+        vga_write("install: ");
+        vga_write(install_error(result));
+        vga_putchar('\n');
+        return 1;
+    }
+
+    /* If the disk brought its own files, its own user settings came too. */
+    if (check.keeps_files) { user_init(); user_load(); }
+
+    vga_write("Yunix is installed on disk ");
+    vga_write(number);
+    vga_write(", and Fish now lives there.\n");
+    vga_write("Take out the CD or USB stick and reboot to start it from the disk.\n");
+    return 0;
+}
+
 static int cmd_color(const char *arg)
 {
     int value = 0;
@@ -968,6 +1070,7 @@ static const struct command commands[] = {
     { "disk",     "[n [yes]]",      "list disks, or move Fish to disk n", cmd_disk    },
     { "partition", "[new <n>]",     "partitions, free space, new Fish",  cmd_partition },
     { "pci",      "[n]",            "list PCI devices, or show one",     cmd_pci      },
+    { "install",  "[n [yes]]",      "install Yunix on disk n",           cmd_install  },
     { "color",    "<0-15>",         "change the text colour",            cmd_color    },
     { "whoami",   "",               "print the current user name",       cmd_whoami   },
     { "user",     "<name>",         "change the user name",              cmd_user     },

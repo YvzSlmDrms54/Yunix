@@ -203,6 +203,50 @@ int disk_select(int index);
 /* 1 if a disk was found on the primary IDE channel at boot, 0 if not. */
 int ata_present(void);
 
+
+/* --- installing ---
+ *
+ * Puts Yunix on a disk so it starts without the CD or USB stick: GRUB's
+ * boot code in sector 0, GRUB's core image from sector 1, the kernel from
+ * sector INSTALL_KERNEL_LBA, and a Fish partition from sector 2048.
+ *
+ * It needs the files to copy - the kernel and GRUB's two images - which
+ * the live ISO hands over at boot. And because writing boot code replaces
+ * whatever boot loader a disk had, it only installs on a disk that is
+ * blank, or holds nothing but a Fish partition. Never next to another
+ * system, so far. */
+
+enum install_verdict {
+    INSTALL_NO,          /* this disk cannot take Yunix; 'reason' says why */
+    INSTALL_FRESH,       /* blank: everything gets written */
+    INSTALL_KEEP_FISH    /* only a Fish partition: boot pieces get written,
+                            Fish stays */
+};
+
+struct install_check {
+    enum install_verdict verdict;
+    const char *reason;
+    int keeps_files;     /* 1 if the disk's Fish files will replace the
+                            ones in memory */
+};
+
+int  install_available(void);      /* 1 if the live ISO handed over the files */
+void install_check(int disk, struct install_check *out);
+
+/* Installs on 'disk'. On success Fish is on that disk: with the files
+ * from memory if its partition was new or empty, or with the files it
+ * already held. Returns INSTALL_OK or an INSTALL_ERR_* code. */
+int  install_run(int disk);
+const char *install_error(int code);
+
+#define INSTALL_OK            0
+#define INSTALL_ERR_NOT_LIVE -1   /* not started from the live ISO */
+#define INSTALL_ERR_FILES    -2   /* the handed-over files look wrong */
+#define INSTALL_ERR_REFUSED  -3   /* install_check said no */
+#define INSTALL_ERR_IO       -4
+#define INSTALL_ERR_VERIFY   -5   /* what was read back differs */
+#define INSTALL_ERR_FISH     -6   /* the boot pieces are in, Fish failed */
+
 /* What is on the disk, as far as Fish is concerned. Seaweed reads the
  * partition table (MBR or GPT) at boot and only ever writes inside a
  * partition marked as Fish's. */
@@ -336,6 +380,10 @@ int  fish_load(void);
  * first creates a partition table with one Fish partition. On a disk that
  * holds anything else it refuses (FISH_ERR_FOREIGN) and changes nothing. */
 int  fish_format(void);
+
+/* 1 if the selected disk's Fish partition holds a Fish image (from an
+ * earlier save or format). Only reads its first sector. */
+int  fish_on_disk(void);
 
 /* 1 if the files in memory have changes that are not on the disk yet. */
 int  fish_unsaved(void);

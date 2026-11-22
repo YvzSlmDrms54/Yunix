@@ -18,6 +18,7 @@
 #include "pci.h"
 #include "ahci.h"
 #include "block.h"
+#include "multiboot.h"
 #include "string.h"
 
 /* Prints a sector count as whole MiB (2048 sectors of 512 bytes each). */
@@ -138,8 +139,12 @@ static void write_disk_name(int index)
     }
 }
 
-void kernel_main(void)
+/* boot.s passes what the boot loader left in EAX and EBX. */
+void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info)
 {
+    /* Before anything else could reuse that memory. */
+    multiboot_init(multiboot_magic, multiboot_info);
+
     vga_init();
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);

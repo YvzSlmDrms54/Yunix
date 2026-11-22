@@ -477,6 +477,19 @@ int fish_load(void)
     return FISH_OK;
 }
 
+int fish_on_disk(void)
+{
+    char sector[BLOCK_SECTOR_SIZE];
+    struct superblock sb;
+
+    if (disk_ready() != FISH_OK) return 0;
+    if (partition_read(0, sector) != 0) return 0;
+    memcpy(&sb, sector, sizeof(sb));
+
+    return sb.magic == FISH_MAGIC && sb.version == FISH_VERSION &&
+           sb.node_count == FISH_MAX_NODES && sb.node_size == sizeof(struct node);
+}
+
 int fish_format(void)
 {
     struct disk_info info;
